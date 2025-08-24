@@ -1,9 +1,13 @@
 # ClearKeep — STATUS
 
-Date: 2025-08-24 (Asia/Manila)
+Date: 2025-08-25 (Asia/Manila)
 
-Local project path: C:\ckchurch1  (junction → My Drive\ClearKeep\ckchurch1)
-Drive sanitized share: My Drive\ClearKeep\ck-reference
+Local project path: C:\ckchurch1  (pure local; no Drive junction)
+Local mirror repo:  C:\ck-reference
+GitHub repo:        K8cutie/ck-reference
+Mirror script:      C:\ckchurch1\sync_to_github.bat
+
+Process contract: see `PROCESS.md` (single-step, read-first, anchors, wait-for-next)
 
 Timezone: Asia/Manila
 API base (dev): http://127.0.0.1:8000
@@ -18,4 +22,4 @@ SQLAlchemy: 2.0.42
 
 Current sprint: Sprint 2 — Accounting Core
 Current step: Step 1 — Posting engine (journals + lines, post/unpost, locks)
-Notes: Run `C:\ckchurch1\sync_to_reference.bat` before sharing updates.
+Notes: Run `C:\ckchurch1\sync_to_github.bat` before asking the assistant to read fresh state.
