@@ -16,11 +16,11 @@ for /r "%REPO%" %%F in (desktop.ini) do del /f /q "%%F" >nul 2>&1
 del /f /q "%REPO%\.git\refs\desktop.ini" 2>nul
 del /f /q "%REPO%\.git\logs\refs\desktop.ini" 2>nul
 
-rem --- Commit & push to GitHub ---
+rem --- Commit first, then rebase/pull, then push ---
 cd /d "%REPO%"
-git pull --rebase
 git add -A
 git commit -m "mirror" || echo No changes to commit.
+git pull --rebase
 git push origin main
 
 endlocal
