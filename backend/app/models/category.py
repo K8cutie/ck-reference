@@ -1,0 +1,1 @@
+from .categories import Category  # shim so imports work either way

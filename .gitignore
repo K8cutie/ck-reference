@@ -1,0 +1,29 @@
+# virtual envs & caches
+.venv/
+.mypy_cache/
+.pytest_cache/
+__pycache__/
+
+# node & build
+node_modules/
+dist/
+build/
+
+# secrets & local config
+.env
+.env.*
+*.pem
+*.key
+APIKEY.txt
+
+# local data dumps & exports
+*.sqlite
+*.bak
+*.log
+*.zip
+*.ics
+*.csv
+
+# misc OS junk
+.DS_Store
+Thumbs.db

@@ -1,0 +1,29 @@
+/* app/(dashboard)/globals.css */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Basic, clean defaults */
+html, body {
+  height: 100%;
+}
+
+body {
+  @apply bg-white text-gray-900 antialiased;
+}
+
+/* Layout helpers */
+.container {
+  @apply mx-auto px-4 sm:px-6 lg:px-8;
+}
+
+/* Card-ish surface used across the dashboard */
+.ck-card {
+  @apply rounded-2xl shadow-sm border border-gray-200 bg-white;
+}
+
+/* Headings */
+.h1 { @apply text-2xl font-semibold tracking-tight; }
+.h2 { @apply text-xl font-semibold tracking-tight; }
+.muted { @apply text-sm text-gray-500; }
