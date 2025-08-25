@@ -20,7 +20,7 @@ from app.schemas.gl_accounting import (
 from app.services.gl_accounting import (
     create_gl_account, update_gl_account, list_gl_accounts,
     create_journal_entry, post_journal_entry, list_journal_entries,
-    fetch_books_view,
+    fetch_books_view, unpost_journal_entry,  # ← NEW import
 )
 
 # -----------------------------
@@ -162,6 +162,17 @@ def api_post_journal_entry(je_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"JE post failed: {e}")
+
+# NEW: Unpost a journal entry (only if its month is not locked)
+@gl_router.post("/journal/{je_id}/unpost", response_model=JournalEntryOut)
+def api_unpost_journal_entry(je_id: int, db: Session = Depends(get_db)):
+    try:
+        return unpost_journal_entry(db, je_id, unposted_by_user_id=None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"JE unpost failed: {e}")
 
 # ------------------------------------
 # Books (JSON and Export ZIP)

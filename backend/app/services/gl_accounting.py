@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Iterable, List, Optional
-
 import json
+
 from sqlalchemy import select, func, text, and_, or_
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,30 @@ from app.models.gl_accounting import (
     JournalLine,
     AuditLog,
 )
+
+# ----------------------------
+# Helpers for period locking
+# ----------------------------
+
+def _first_of_month(d: date) -> date:
+    return date(d.year, d.month, 1)
+
+def _is_period_locked(db: Session, d: date) -> bool:
+    """
+    True if the month containing 'd' is locked in gl_period_locks.
+    Uses a lightweight raw SQL check (no ORM model required).
+    """
+    sql = text(
+        """
+        SELECT is_locked
+        FROM gl_period_locks
+        WHERE period_month = :period_month
+        LIMIT 1
+        """
+    )
+    row = db.execute(sql, {"period_month": _first_of_month(d)}).first()
+    return bool(row and row[0])
+
 
 # ----------------------------
 # Accounts (Chart of Accounts)
@@ -253,6 +277,11 @@ def post_journal_entry(
     if je.is_locked:
         return je  # already posted/locked
 
+    # 🚫 Enforce month locks
+    if _is_period_locked(db, je.entry_date):
+        y_m = je.entry_date.strftime("%Y-%m")
+        raise ValueError(f"Cannot post: period {y_m} is locked.")
+
     # enforce balanced before posting
     total_debits = sum((ln.debit or 0) for ln in je.lines)
     total_credits = sum((ln.credit or 0) for ln in je.lines)
@@ -266,6 +295,40 @@ def post_journal_entry(
     je.locked_at = now
 
     _log(db, "journal_entry", str(je.id), "post", {"entry_no": int(je.entry_no or 0)})
+    db.commit()
+    db.refresh(je)
+    return je
+
+def unpost_journal_entry(
+    db: Session,
+    je_id: int,
+    *,
+    unposted_by_user_id: Optional[int] = None,
+) -> JournalEntry:
+    """
+    Make a posted JE draft again.
+    Guardrails:
+      - If the original entry month is locked, refuse.
+      - Otherwise clear post flags and unlock.
+    """
+    je = get_journal_entry(db, je_id)
+    if not je:
+        raise ValueError("Journal entry not found.")
+
+    if not je.is_locked:
+        return je  # already draft
+
+    # 🚫 Enforce month locks (cannot unpost in a locked period)
+    if _is_period_locked(db, je.entry_date):
+        y_m = je.entry_date.strftime("%Y-%m")
+        raise ValueError(f"Cannot unpost: period {y_m} is locked.")
+
+    je.posted_at = None
+    je.posted_by_user_id = None
+    je.is_locked = False
+    je.locked_at = None
+
+    _log(db, "journal_entry", str(je.id), "unpost", {"entry_no": int(je.entry_no or 0)})
     db.commit()
     db.refresh(je)
     return je

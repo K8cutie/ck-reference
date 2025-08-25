@@ -42,6 +42,9 @@ from app.api.gl_accounting import (
     compliance_router as books_compliance_router,  # -> /compliance/books, /compliance/books/export
 )
 
+# Period lock management
+from app.api.gl_locks import router as gl_locks_router  # -> /gl/locks
+
 # GL Reports
 from app.api.trial_balance import router as trial_balance_router            # -> /gl/reports/trial_balance
 from app.api.income_statement import router as income_statement_router      # -> /gl/reports/income_statement
@@ -102,6 +105,9 @@ app.include_router(rbac.router)             # /rbac
 # --- Accounting (Books-Only) ---
 app.include_router(gl_accounting_router)    # /gl
 app.include_router(books_compliance_router) # /compliance/books, /compliance/books/export
+
+# --- Period Locks ---
+app.include_router(gl_locks_router)         # /gl/locks
 
 # --- GL Reports ---
 app.include_router(trial_balance_router)    # /gl/reports/trial_balance
