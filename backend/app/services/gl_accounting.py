@@ -79,6 +79,7 @@ def list_gl_accounts(
     stmt = stmt.limit(limit).offset(offset)
     return list(db.execute(stmt).scalars().all())
 
+
 def create_gl_account(
     db: Session,
     *,
@@ -113,6 +114,7 @@ def create_gl_account(
     db.refresh(acct)
     return acct
 
+
 def update_gl_account(
     db: Session,
     account_id: int,
@@ -133,6 +135,7 @@ def update_gl_account(
         if get_gl_account_by_code(db, code):
             raise ValueError(f"GL account code already exists: {code}")
         acct.code = code
+
     if name and name != acct.name:
         name_exists = db.execute(
             select(GLAccount.id).where(
@@ -145,6 +148,7 @@ def update_gl_account(
         if name_exists:
             raise ValueError(f"GL account name already exists: {name}")
         acct.name = name
+
     if type_:
         acct.type = type_
     if normal_side:
@@ -169,6 +173,7 @@ def update_gl_account(
 def get_journal_entry(db: Session, je_id: int) -> Optional[JournalEntry]:
     return db.get(JournalEntry, je_id)
 
+
 def list_journal_entries(
     db: Session,
     date_from: Optional[date] = None,
@@ -179,7 +184,9 @@ def list_journal_entries(
     limit: int = 50,
     offset: int = 0,
 ) -> List[JournalEntry]:
-    stmt = select(JournalEntry).order_by(JournalEntry.entry_date.asc(), JournalEntry.entry_no.asc())
+    stmt = select(JournalEntry).order_by(
+        JournalEntry.entry_date.asc(), JournalEntry.entry_no.asc()
+    )
 
     if date_from:
         stmt = stmt.where(JournalEntry.entry_date >= date_from)
@@ -194,6 +201,7 @@ def list_journal_entries(
 
     stmt = stmt.limit(limit).offset(offset)
     return list(db.execute(stmt).scalars().unique().all())
+
 
 def create_journal_entry(
     db: Session,
@@ -224,7 +232,9 @@ def create_journal_entry(
 
         # one-side-only rule
         if not ((debit > 0 and credit == 0) or (credit > 0 and debit == 0)):
-            raise ValueError("Each line must have either a positive debit or a positive credit, not both or neither.")
+            raise ValueError(
+                "Each line must have either a positive debit or a positive credit, not both or neither."
+            )
 
         total_debits += debit
         total_credits += credit
@@ -265,6 +275,7 @@ def create_journal_entry(
     db.refresh(je)
     return je
 
+
 def post_journal_entry(
     db: Session,
     je_id: int,
@@ -274,15 +285,17 @@ def post_journal_entry(
     je = get_journal_entry(db, je_id)
     if not je:
         raise ValueError("Journal entry not found.")
+
+    # Already posted/locked?
     if je.is_locked:
-        return je  # already posted/locked
+        return je
 
     # 🚫 Enforce month locks
     if _is_period_locked(db, je.entry_date):
         y_m = je.entry_date.strftime("%Y-%m")
         raise ValueError(f"Cannot post: period {y_m} is locked.")
 
-    # enforce balanced before posting
+    # Enforce balance before posting
     total_debits = sum((ln.debit or 0) for ln in je.lines)
     total_credits = sum((ln.credit or 0) for ln in je.lines)
     if round(float(total_debits) - float(total_credits), 2) != 0.0:
@@ -298,6 +311,7 @@ def post_journal_entry(
     db.commit()
     db.refresh(je)
     return je
+
 
 def unpost_journal_entry(
     db: Session,
@@ -351,29 +365,41 @@ def fetch_books_view(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
 ) -> List[dict]:
-    """Return rows from one of the BIR books views as list[dict]."""
+    """
+    Return rows from one of the BIR books views as list[dict].
+
+    IMPORTANT: We only show **posted** entries. We inner-join each view to
+    journal_entries on (reference_no, entry_date) and filter je.is_locked = TRUE.
+    """
     if view_key not in BOOK_VIEWS:
         raise ValueError(f"Unknown books view: {view_key}")
+
     view_name = BOOK_VIEWS[view_key]
 
-    # All views expose a 'date' column; apply range if provided
-    where = []
-    params = {}
+    where = ["je.is_locked = TRUE"]
+    params: dict = {}
+
     if date_from:
-        where.append("date >= :date_from")
+        where.append("je.entry_date >= :date_from")
         params["date_from"] = date_from
     if date_to:
-        where.append("date <= :date_to")
+        where.append("je.entry_date <= :date_to")
         params["date_to"] = date_to
 
-    sql = f"SELECT * FROM {view_name}"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    sql = f"""
+        SELECT v.*
+        FROM {view_name} v
+        JOIN journal_entries je
+          ON je.reference_no = v.reference
+         AND je.entry_date   = v.date
+        WHERE {" AND ".join(where)}
+    """
+
     # Stable sort
     if view_key in ("general_journal", "cash_receipts_book", "cash_disbursements_book"):
-        sql += " ORDER BY date, reference"
+        sql += " ORDER BY v.date, v.reference"
     elif view_key == "general_ledger":
-        sql += " ORDER BY account_code, date, reference"
+        sql += " ORDER BY v.account_code, v.date, v.reference"
 
     result = db.execute(text(sql), params)
     return [dict(row._mapping) for row in result]
@@ -383,7 +409,13 @@ def fetch_books_view(
 # Internal audit log helper
 # ----------------------------
 
-def _log(db: Session, entity_type: str, entity_id: str, action: str, details: dict | None = None) -> None:
+def _log(
+    db: Session,
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    details: dict | None = None,
+) -> None:
     try:
         db.add(
             AuditLog(
