@@ -11,6 +11,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text  # for simple period-lock check
 
 from app.db import SessionLocal
 from app.schemas.gl_accounting import (
@@ -20,7 +21,7 @@ from app.schemas.gl_accounting import (
 from app.services.gl_accounting import (
     create_gl_account, update_gl_account, list_gl_accounts,
     create_journal_entry, post_journal_entry, list_journal_entries,
-    fetch_books_view, unpost_journal_entry, reverse_journal_entry,  # ← includes reverse
+    fetch_books_view, unpost_journal_entry, reverse_journal_entry,
 )
 
 # -----------------------------
@@ -175,7 +176,6 @@ def api_unpost_journal_entry(je_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"JE unpost failed: {e}")
 
 
-# NEW: Reverse a posted JE (creates & posts a reversing entry)
 @gl_router.post("/journal/{je_id}/reverse", response_model=JournalEntryOut)
 def api_reverse_journal_entry(
     je_id: int,
@@ -191,9 +191,64 @@ def api_reverse_journal_entry(
         raise HTTPException(status_code=500, detail=f"JE reverse failed: {e}")
 
 # ------------------------------------
+# Opening Balances — create & post one opening JE for the month
+# ------------------------------------
+@gl_router.post("/opening-balances", response_model=JournalEntryOut)
+def api_opening_balances(payload: JournalEntryCreate, db: Session = Depends(get_db)):
+    """
+    Creates a posted Opening Balances JE on the **first day** of the month of `payload.entry_date`,
+    with reference OPEN-YYYYMM. Rejects locked months or duplicates for the same month.
+    Only the `lines` are used from payload; other fields are normalized.
+    """
+    try:
+        if not payload.entry_date:
+            raise HTTPException(status_code=400, detail="entry_date is required")
+
+        first = date(payload.entry_date.year, payload.entry_date.month, 1)
+        y_m = first.strftime("%Y-%m")
+        ref = f"OPEN-{first.strftime('%Y%m')}"
+
+        # Reject locked period
+        row = db.execute(
+            text("SELECT is_locked FROM gl_period_locks WHERE period_month = :pm LIMIT 1"),
+            {"pm": first},
+        ).first()
+        if row and bool(row[0]):
+            raise HTTPException(status_code=400, detail=f"Cannot create opening balances: period {y_m} is locked.")
+
+        # Prevent duplicate opening JE for the month (reference + posted)
+        existing = list_journal_entries(db, reference_no=ref, is_locked=True, limit=1, offset=0)
+        if existing:
+            raise HTTPException(status_code=409, detail=f"Opening balances already posted for {y_m}.")
+
+        # Create draft JE on the first of the month
+        je = create_journal_entry(
+            db,
+            entry_date=first,
+            memo="Opening Balances",
+            currency_code=payload.currency_code or "PHP",
+            reference_no=ref,
+            source_module="opening",
+            source_id=ref,
+            lines=[l.model_dump() for l in payload.lines],
+            created_by_user_id=None,
+        )
+
+        # Post it
+        je = post_journal_entry(db, je.id, posted_by_user_id=None)
+        return je
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Opening balances failed: {e}")
+
+# ------------------------------------
 # Books (JSON and Export ZIP)
 # ------------------------------------
-# Put the static route first and give the dynamic route its own segment to avoid clashes.
 @compliance_router.get("/export")
 def api_books_export_zip(
     date_from: Optional[date] = None,
@@ -229,11 +284,8 @@ def api_books_export_zip(
         now = datetime.now().strftime("%Y%m%d_%H%M%S")
         zip_buf = BytesIO()
         with ZipFile(zip_buf, "w", ZIP_DEFLATED) as zf:
-            # CSV files
             for vk in view_keys:
                 zf.writestr(f"{vk}.csv", csv_bytes(vk, data[vk]))
-
-            # Simple transmittal HTML
             if include_html_transmittal:
                 html = _render_transmittal_html(date_from, date_to, data)
                 zf.writestr("transmittal.html", html.encode("utf-8"))
