@@ -348,6 +348,64 @@ def unpost_journal_entry(
     return je
 
 
+def reverse_journal_entry(
+    db: Session,
+    je_id: int,
+    *,
+    as_of: Optional[date] = None,
+    created_by_user_id: Optional[int] = None,
+) -> JournalEntry:
+    """
+    Create and post a reversing entry for a **posted** JE.
+    - Reversal date defaults to the source JE's date unless `as_of` is provided.
+    - Guardrails:
+        * Source must be posted (locked).
+        * Target reversal month must not be locked.
+    """
+    src = get_journal_entry(db, je_id)
+    if not src:
+        raise ValueError("Journal entry not found.")
+    if not src.is_locked:
+        raise ValueError("Cannot reverse a draft journal entry.")
+
+    rev_date = as_of or src.entry_date
+    if _is_period_locked(db, rev_date):
+        y_m = rev_date.strftime("%Y-%m")
+        raise ValueError(f"Cannot create reversal in locked period {y_m}.")
+
+    # Build reversed lines (swap debit/credit)
+    lines: List[dict] = []
+    for ln in src.lines:
+        debit = float(ln.credit or 0)
+        credit = float(ln.debit or 0)
+        lines.append(
+            {
+                "account_id": ln.account_id,
+                "description": f"Reversal of JE {src.entry_no}",
+                "debit": debit,
+                "credit": credit,
+            }
+        )
+
+    ref_base = src.reference_no or f"JE-{src.entry_no}"
+    ref_rev = f"{ref_base}-REV"
+
+    rev = create_journal_entry(
+        db,
+        entry_date=rev_date,
+        memo=(src.memo or "") + " (reversal)",
+        currency_code=src.currency_code or "PHP",
+        reference_no=ref_rev,
+        source_module="reversal",
+        source_id=str(src.id),
+        lines=lines,
+        created_by_user_id=created_by_user_id,
+    )
+
+    # Post reversal (will re-check balance & lock)
+    return post_journal_entry(db, rev.id, posted_by_user_id=created_by_user_id)
+
+
 # ----------------------------
 # Books (views) helpers
 # ----------------------------
@@ -365,41 +423,30 @@ def fetch_books_view(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
 ) -> List[dict]:
-    """
-    Return rows from one of the BIR books views as list[dict].
-
-    IMPORTANT: We only show **posted** entries. We inner-join each view to
-    journal_entries on (reference_no, entry_date) and filter je.is_locked = TRUE.
-    """
+    """Return rows from one of the BIR books views as list[dict]."""
     if view_key not in BOOK_VIEWS:
         raise ValueError(f"Unknown books view: {view_key}")
 
     view_name = BOOK_VIEWS[view_key]
 
-    where = ["je.is_locked = TRUE"]
-    params: dict = {}
-
+    where = []
+    params = {}
     if date_from:
-        where.append("je.entry_date >= :date_from")
+        where.append("date >= :date_from")
         params["date_from"] = date_from
     if date_to:
-        where.append("je.entry_date <= :date_to")
+        where.append("date <= :date_to")
         params["date_to"] = date_to
 
-    sql = f"""
-        SELECT v.*
-        FROM {view_name} v
-        JOIN journal_entries je
-          ON je.reference_no = v.reference
-         AND je.entry_date   = v.date
-        WHERE {" AND ".join(where)}
-    """
+    sql = f"SELECT * FROM {view_name}"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
 
     # Stable sort
     if view_key in ("general_journal", "cash_receipts_book", "cash_disbursements_book"):
-        sql += " ORDER BY v.date, v.reference"
+        sql += " ORDER BY date, reference"
     elif view_key == "general_ledger":
-        sql += " ORDER BY v.account_code, v.date, v.reference"
+        sql += " ORDER BY account_code, date, reference"
 
     result = db.execute(text(sql), params)
     return [dict(row._mapping) for row in result]

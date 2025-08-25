@@ -20,7 +20,7 @@ from app.schemas.gl_accounting import (
 from app.services.gl_accounting import (
     create_gl_account, update_gl_account, list_gl_accounts,
     create_journal_entry, post_journal_entry, list_journal_entries,
-    fetch_books_view, unpost_journal_entry,  # ← NEW import
+    fetch_books_view, unpost_journal_entry, reverse_journal_entry,  # ← includes reverse
 )
 
 # -----------------------------
@@ -37,7 +37,7 @@ def get_db():
 # Routers
 # -----------------------------
 gl_router = APIRouter(prefix="/gl", tags=["Accounting (Books-Only)"])
-# NOTE: put the books endpoints under a distinct prefix to avoid conflicts
+# NOTE: put the books endpoints under a distinct prefix to avoid clashes
 compliance_router = APIRouter(prefix="/compliance/books", tags=["BIR Books"])
 
 # ------------------------------------
@@ -163,7 +163,7 @@ def api_post_journal_entry(je_id: int, db: Session = Depends(get_db)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"JE post failed: {e}")
 
-# NEW: Unpost a journal entry (only if its month is not locked)
+
 @gl_router.post("/journal/{je_id}/unpost", response_model=JournalEntryOut)
 def api_unpost_journal_entry(je_id: int, db: Session = Depends(get_db)):
     try:
@@ -173,6 +173,22 @@ def api_unpost_journal_entry(je_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"JE unpost failed: {e}")
+
+
+# NEW: Reverse a posted JE (creates & posts a reversing entry)
+@gl_router.post("/journal/{je_id}/reverse", response_model=JournalEntryOut)
+def api_reverse_journal_entry(
+    je_id: int,
+    as_of: Optional[date] = Query(None, description="Reverse as of this date; defaults to source JE date"),
+    db: Session = Depends(get_db),
+):
+    try:
+        return reverse_journal_entry(db, je_id, as_of=as_of, created_by_user_id=None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"JE reverse failed: {e}")
 
 # ------------------------------------
 # Books (JSON and Export ZIP)
