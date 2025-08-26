@@ -21,7 +21,7 @@
 
 ---
 
-## Change Log — 2025-08-27 (Accounting QA & Perf)
+## Change Log — 2025-08-27 (Accounting QA, Perf & RBAC)
 
 - **Reports correctness (v2) — ✅**  
   NI vs CLOSE equity matches for **2025-08** (NI=₱4,100.00, Equity=₱4,100.00; entries analyzed=31).
@@ -37,6 +37,15 @@
   - `ix_journal_entries_reference_no`  
   - `ix_journal_lines_entry_id`  
   - `ix_gl_period_locks_period_month`
+
+- **RBAC wiring (dev-bypass ON) — ✅**  
+  Guards added:
+  - **Journal:** post (`gl:journal:post`), unpost (`gl:journal:unpost`), reverse (`gl:journal:reverse`)
+  - **Periods:** close (`gl:close`), reopen (`gl:reopen`), reclose (`gl:reclose`)
+  - **Ranges:** close-range (`gl:close:range`), reopen-range (`gl:reopen:range`), reclose-range (`gl:reclose:range`)
+  - **Locks status** stays public (read-only)  
+  **RBAC mode:** `RBAC_ENFORCE=false` (default; fast dev).  
+  **Helper:** `scripts/ps_api_helpers.ps1` (`ckget`, `ckpost`, `ckreclose`); if `CK_API` is set, it auto-sends `X-API-Key`.
 
 ---
 
@@ -61,7 +70,7 @@
 - **Reclose:** ✅ `POST /gl/reclose/2025-08` returns 200 with `CLOSE-202508` posted
 - **Range:** ✅ `POST /gl/reclose-range/2025-07/2025-08` → summary (`2025-07` nothing to close; `2025-08` ok)
 - **Locks status:** ✅ `GET /gl/locks/status?from=2025-07&to=2025-08` reflects reopened/closed states
-- **Race condition:** advisory lock produces one success + one “busy” (re-run may yield {200,400})
+- **Race condition:** advisory lock yields one success + one “busy” (re-run may yield {200,400})
 
 ---
 
@@ -75,17 +84,17 @@
 - **Journal Entries**
   - `GET /gl/journal`
   - `POST /gl/journal`
-  - `POST /gl/journal/{id}/post`
-  - `POST /gl/journal/{id}/unpost`
-  - `POST /gl/journal/{id}/reverse`
+  - `POST /gl/journal/{id}/post` *(RBAC: `gl:journal:post`)*
+  - `POST /gl/journal/{id}/unpost` *(RBAC: `gl:journal:unpost`)*
+  - `POST /gl/journal/{id}/reverse` *(RBAC: `gl:journal:reverse`)*
 - **Periods**
-  - `POST /gl/close/{YYYY-MM}`
-  - `POST /gl/reopen/{YYYY-MM}`
-  - `POST /gl/reclose/{YYYY-MM}`
-  - `POST /gl/close-range/{start}/{end}`
-  - `POST /gl/reopen-range/{start}/{end}`
-  - `POST /gl/reclose-range/{start}/{end}`
-  - `GET  /gl/locks/status?from=YYYY-MM&to=YYYY-MM`
+  - `POST /gl/close/{YYYY-MM}` *(RBAC: `gl:close`)*
+  - `POST /gl/reopen/{YYYY-MM}` *(RBAC: `gl:reopen`)*
+  - `POST /gl/reclose/{YYYY-MM}` *(RBAC: `gl:reclose`)*
+  - `POST /gl/close-range/{start}/{end}` *(RBAC: `gl:close:range`)*
+  - `POST /gl/reopen-range/{start}/{end}` *(RBAC: `gl:reopen:range`)*
+  - `POST /gl/reclose-range/{start}/{end}` *(RBAC: `gl:reclose:range`)*
+  - `GET  /gl/locks/status?from=YYYY-MM&to=YYYY-MM` *(public)*
 
 ### /compliance/books
 - `GET /compliance/books/view/{view_key}` *(general_journal | general_ledger | cash_receipts_book | cash_disbursements_book)*

@@ -1,3 +1,4 @@
+# app/api/gl_journal.py
 from __future__ import annotations
 
 from datetime import date
@@ -14,6 +15,8 @@ from app.services.gl_accounting import (
     unpost_journal_entry,
     reverse_journal_entry,
 )
+# RBAC guard
+from app.api.rbac import require_permission
 
 router = APIRouter()  # mounted under /gl
 
@@ -36,8 +39,16 @@ def api_list_journal_entries(
     db: Session = Depends(get_db),
 ):
     try:
-        return list_journal_entries(db, date_from=date_from, date_to=date_to, reference_no=reference_no,
-                                    source_module=source_module, is_locked=is_locked, limit=limit, offset=offset)
+        return list_journal_entries(
+            db,
+            date_from=date_from,
+            date_to=date_to,
+            reference_no=reference_no,
+            source_module=source_module,
+            is_locked=is_locked,
+            limit=limit,
+            offset=offset,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"JE list failed: {e}")
 
@@ -60,7 +71,11 @@ def api_create_journal_entry(payload: JournalEntryCreate, db: Session = Depends(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"JE create failed: {e}")
 
-@router.post("/journal/{je_id}/post", response_model=JournalEntryOut)
+@router.post(
+    "/journal/{je_id}/post",
+    response_model=JournalEntryOut,
+    dependencies=[Depends(require_permission("gl:journal:post"))],
+)
 def api_post_journal_entry(je_id: int, db: Session = Depends(get_db)):
     try:
         return post_journal_entry(db, je_id, posted_by_user_id=None)
@@ -69,7 +84,11 @@ def api_post_journal_entry(je_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"JE post failed: {e}")
 
-@router.post("/journal/{je_id}/unpost", response_model=JournalEntryOut)
+@router.post(
+    "/journal/{je_id}/unpost",
+    response_model=JournalEntryOut,
+    dependencies=[Depends(require_permission("gl:journal:unpost"))],
+)
 def api_unpost_journal_entry(je_id: int, db: Session = Depends(get_db)):
     try:
         return unpost_journal_entry(db, je_id, unposted_by_user_id=None)
@@ -78,7 +97,11 @@ def api_unpost_journal_entry(je_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"JE unpost failed: {e}")
 
-@router.post("/journal/{je_id}/reverse", response_model=JournalEntryOut)
+@router.post(
+    "/journal/{je_id}/reverse",
+    response_model=JournalEntryOut,
+    dependencies=[Depends(require_permission("gl:journal:reverse"))],
+)
 def api_reverse_journal_entry(
     je_id: int,
     as_of: Optional[date] = Query(None, description="Reverse as of this date; defaults to source JE date"),
