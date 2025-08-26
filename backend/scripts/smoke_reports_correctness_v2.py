@@ -1,4 +1,4 @@
-# scripts/smoke_reports_correctness.py
+# scripts/smoke_reports_correctness_v2.py
 from __future__ import annotations
 import os, sys, json
 from datetime import datetime, date
@@ -24,38 +24,42 @@ def last_dom(y, m):
 D = lambda x: Decimal(str(x))
 
 def fetch_all_accounts():
-    """Paginate /gl/accounts until exhausted (limit=200 per page)."""
-    out = []
-    offset = 0
+    out, offset = [], 0
     while True:
         chunk = req("GET", "/gl/accounts", params={"limit": 200, "offset": offset})
-        if not chunk:
-            break
+        if not chunk: break
         out.extend(chunk)
-        if len(chunk) < 200:
-            break
+        if len(chunk) < 200: break
         offset += len(chunk)
     return out
 
 def fetch_all_journal_entries(date_from: str, date_to: str):
-    """Paginate /gl/journal until exhausted (limit=200 per page)."""
-    out = []
-    offset = 0
+    out, offset = [], 0
     while True:
         chunk = req("GET", "/gl/journal", params={
-            "date_from": date_from,
-            "date_to": date_to,
-            "is_locked": True,
-            "limit": 200,
-            "offset": offset
+            "date_from": date_from, "date_to": date_to, "is_locked": True,
+            "limit": 200, "offset": offset
         })
-        if not chunk:
-            break
+        if not chunk: break
         out.extend(chunk)
-        if len(chunk) < 200:
-            break
+        if len(chunk) < 200: break
         offset += len(chunk)
     return out
+
+def fetch_latest_closing(close_ref: str):
+    # paginate all closings for this ref; pick the highest id (latest)
+    out, offset = [], 0
+    while True:
+        chunk = req("GET", "/gl/journal", params={
+            "reference_no": close_ref, "is_locked": True, "limit": 200, "offset": offset
+        })
+        if not chunk: break
+        out.extend(chunk)
+        if len(chunk) < 200: break
+        offset += len(chunk)
+    if not out:
+        return None
+    return max(out, key=lambda je: int(je.get("id", 0)))
 
 def main():
     now = datetime.now(); y, m = now.year, now.month
@@ -64,15 +68,14 @@ def main():
     period = f"{y:04d}-{m:02d}"
     close_ref = f"CLOSE-{y:04d}{m:02d}"
 
-    # accounts (paginate to avoid missing types)
+    # accounts (id -> type), equity id set
     accts = fetch_all_accounts()
     id_type = {int(a["id"]): (a.get("type") or "").lower() for a in accts}
     equity_ids = {aid for aid, t in id_type.items() if t == "equity"}
 
-    # posted journal entries for the month (paginate)
+    # posted journal entries for month (exclude OPEN/CLOSE in aggregation)
     jes = fetch_all_journal_entries(first, last)
 
-    # aggregate from lines (exclude OPEN/CLOSE refs)
     debs = Decimal("0"); creds = Decimal("0")
     inc_net = Decimal("0"); exp_net = Decimal("0")
 
@@ -81,8 +84,7 @@ def main():
         if isinstance(ref, str) and (ref.startswith("OPEN-") or ref.startswith("CLOSE-")):
             continue
         for ln in je.get("lines", []):
-            dr = D(ln.get("debit") or 0)
-            cr = D(ln.get("credit") or 0)
+            dr = D(ln.get("debit") or 0); cr = D(ln.get("credit") or 0)
             debs += dr; creds += cr
             t = id_type.get(int(ln.get("account_id")), "")
             if t == "income":
@@ -90,17 +92,14 @@ def main():
             elif t == "expense":
                 exp_net += (dr - cr)
 
-    # zero-sum check
     if (debs - creds).copy_abs() > Decimal("0.01"):
         raise SystemExit(f"❌ Zero-sum fail {period}: debits={debs} credits={creds}")
 
-    # fetch closing JE and compute equity amount
-    closings = req("GET", "/gl/journal", params={
-        "reference_no": close_ref, "is_locked": True, "limit": 5, "offset": 0
-    })
-    if not closings:
+    # latest closing (by id) and its equity amount
+    closing = fetch_latest_closing(close_ref)
+    if not closing:
         raise SystemExit(f"❌ No closing JE found for {period} ({close_ref}).")
-    closing = closings[-1]
+
     eq_net = Decimal("0")
     for ln in closing.get("lines", []):
         if int(ln.get("account_id")) in equity_ids:
@@ -115,8 +114,7 @@ def main():
             "close_ref": close_ref,
             "closing_je_id": int(closing.get("id")),
             "debits": str(debs), "credits": str(creds),
-            "entries_analyzed": len(jes),
-            "accounts_count": len(accts),
+            "entries_analyzed": len(jes), "accounts_count": len(accts),
         }
         raise SystemExit("❌ P&L vs CLOSE mismatch:\n" + json.dumps(detail, indent=2))
 

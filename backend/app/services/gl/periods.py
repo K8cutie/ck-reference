@@ -21,22 +21,15 @@ from app.services.gl.journal import (
 # ----------------------------
 
 def _period_lock_key(year: int, month: int) -> int:
-    """
-    Build a small integer key for advisory locks, unique per YYYY-MM.
-    Example: 2025-08 -> 202508
-    """
-    return year * 100 + month  # fits in 32-bit signed; ok for our purposes
+    """Unique-ish key per YYYY-MM for PG advisory locks."""
+    return year * 100 + month
 
 def _try_lock_month(db: Session, year: int, month: int) -> bool:
-    k = _period_lock_key(year, month)
-    # Returns True if lock acquired, False if another session holds it
-    got = db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": k}).scalar()
+    got = db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _period_lock_key(year, month)}).scalar()
     return bool(got)
 
 def _unlock_month(db: Session, year: int, month: int) -> None:
-    k = _period_lock_key(year, month)
-    # Always attempt unlock; no-op if not held
-    db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": k})
+    db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _period_lock_key(year, month)})
 
 def _has_posted_reversal_for(db: Session, closing_id: int) -> bool:
     """True if a posted reversal exists for the given closing JE id."""
@@ -48,6 +41,21 @@ def _has_posted_reversal_for(db: Session, closing_id: int) -> bool:
         )
     ).scalar()
     return bool(count and int(count) > 0)
+
+# Common month activity SQL (excludes system JEs)
+MONTH_ACTIVITY_SQL = text(
+    """
+    SELECT a.id AS account_id, a.type AS acct_type, a.code AS code, a.name AS name,
+           COALESCE(SUM(l.debit),0) AS dr, COALESCE(SUM(l.credit),0) AS cr
+    FROM journal_lines l
+    JOIN journal_entries je ON je.id = l.entry_id
+    JOIN gl_accounts a ON a.id = l.account_id
+    WHERE je.is_locked = TRUE
+      AND je.entry_date >= :first AND je.entry_date <= :last
+      AND COALESCE(je.source_module, '') NOT IN ('opening','closing','reversal')
+    GROUP BY a.id, a.type, a.code, a.name
+    """
+)
 
 # ----------------------------
 # Close / Reopen / Reclose
@@ -64,9 +72,8 @@ def close_period(
 ) -> JournalEntry:
     """
     Close Income/Expense into Equity for (year, month).
-    Creates a posted JE dated last day of month with ref CLOSE-YYYYMM, then locks the period.
-    Allows reclose only if every prior closing has a posted reversal keyed by source_id=<closing.id>.
-    Uses a per-month advisory lock to prevent concurrent closes.
+    Uses advisory lock to prevent concurrent closes.
+    Ignores system JEs (opening/closing/reversal) when computing month activity.
     """
     if not _try_lock_month(db, year, month):
         raise ValueError(f"Period {year}-{month:02d} is busy; try again shortly.")
@@ -91,20 +98,8 @@ def close_period(
             if unresolved:
                 raise ValueError(f"Already closed for {year}-{month:02d}.")
 
-        # Aggregate posted month activity
-        sql = text(
-            """
-            SELECT a.id AS account_id, a.type AS acct_type, a.code AS code, a.name AS name,
-                   COALESCE(SUM(l.debit),0) AS dr, COALESCE(SUM(l.credit),0) AS cr
-            FROM journal_lines l
-            JOIN journal_entries je ON je.id = l.entry_id
-            JOIN gl_accounts a ON a.id = l.account_id
-            WHERE je.is_locked = TRUE
-              AND je.entry_date >= :first AND je.entry_date <= :last
-            GROUP BY a.id, a.type, a.code, a.name
-            """
-        )
-        rows = db.execute(sql, {"first": first, "last": last}).mappings().all()
+        # Aggregate posted month activity (excluding system JEs)
+        rows = db.execute(MONTH_ACTIVITY_SQL, {"first": first, "last": last}).mappings().all()
 
         income_total = Decimal("0.00")
         expense_total = Decimal("0.00")
@@ -174,11 +169,11 @@ def reclose_period(
     created_by_user_id: Optional[int] = None,
 ) -> JournalEntry:
     """
-    Re-close a month after new postings following a reopen:
-      1) acquire per-month advisory lock (busy -> fail fast)
-      2) reopen (idempotent)
+    Re-close a month:
+      1) acquire advisory lock
+      2) reopen
       3) ensure every posted CLOSE-YYYYMM has a posted reversal keyed by source_id=<closing.id>
-      4) close again
+      4) close again (aggregation excludes system JEs)
     """
     if not _try_lock_month(db, year, month):
         raise ValueError(f"Period {year}-{month:02d} is busy; try again shortly.")
