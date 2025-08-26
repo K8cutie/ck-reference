@@ -354,6 +354,40 @@ export default function JournalPage() {
     }
   }
 
+  // NEW: Unpost a posted JE
+  async function unpostJE(id: number) {
+    try {
+      const res = await fetch(`${API_BASE}/gl/journal/${id}/unpost`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-TZ": TZ,
+        },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await fetchJournal();
+    } catch (e) {
+      alert("Unpost failed:\n" + (e as any)?.message);
+    }
+  }
+
+  // NEW: Reverse a posted JE (as-of source date; backend defaults if not provided)
+  async function reverseJE(id: number) {
+    try {
+      const res = await fetch(`${API_BASE}/gl/journal/${id}/reverse`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-TZ": TZ,
+        },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await fetchJournal();
+    } catch (e) {
+      alert("Reverse failed:\n" + (e as any)?.message);
+    }
+  }
+
   async function exportBooks() {
     // Use filters if set; otherwise default to the current month
     const rng = monthBounds(new Date());
@@ -504,7 +538,7 @@ export default function JournalPage() {
               <th className="w-32">Reference</th>
               <th className="w-24">Currency</th>
               <th className="w-28">Posted</th>
-              <th className="w-28">Actions</th>
+              <th className="w-36">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -573,13 +607,31 @@ export default function JournalPage() {
                           >
                             {openId === je.id ? "Hide" : "View"}
                           </button>
-                          {!posted && (
+                          {!posted ? (
                             <button
                               onClick={() => postJE(je.id)}
                               className="px-2 py-1 rounded-lg bg-black text-white"
+                              title="Post (locks this entry)"
                             >
                               Post
                             </button>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => unpostJE(je.id)}
+                                className="px-2 py-1 rounded-lg border bg-white"
+                                title="Unpost (makes this a draft again)"
+                              >
+                                Unpost
+                              </button>
+                              <button
+                                onClick={() => reverseJE(je.id)}
+                                className="px-2 py-1 rounded-lg border bg-white"
+                                title="Create a posted reversal entry"
+                              >
+                                Reverse
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -675,7 +727,7 @@ export default function JournalPage() {
                 className="text-gray-500 hover:text-gray-700"
                 onClick={() => setShowCreate(false)}
               >
-                ✕
+                ✖
               </button>
             </div>
             <form onSubmit={onCreate} className="p-4 space-y-4">
@@ -738,7 +790,7 @@ export default function JournalPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">
+                  <label className="block text.sm font-medium mb-1">
                     Source ID
                   </label>
                   <input
@@ -768,9 +820,7 @@ export default function JournalPage() {
                   <div className="text-sm font-medium">
                     Lines (balanced:{" "}
                     <span
-                      className={
-                        isBalanced ? "text-green-600" : "text-red-600"
-                      }
+                      className={isBalanced ? "text-green-600" : "text-red-600"}
                     >
                       {isBalanced ? "yes" : "no"}
                     </span>
@@ -780,7 +830,7 @@ export default function JournalPage() {
                   <button
                     type="button"
                     onClick={addLine}
-                    className="px-2 py-1 rounded-lg border bg-white"
+                    className="px-2 py-1 rounded-lg border bg.white"
                   >
                     + Add line
                   </button>

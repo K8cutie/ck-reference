@@ -8,23 +8,24 @@ import { useEffect, useMemo, useState } from "react";
 type NavItem = {
   label: string;
   href: string;
-  emoji: string;
+  emoji: string; // stored as Unicode escapes to avoid encoding issues
   match?: (p: string) => boolean;
 };
 
+// All emoji values below use Unicode escapes (ASCII-only file) to prevent mojibake
 const NAV: NavItem[] = [
-  { label: "Dashboard",    href: "/dashboard",            emoji: "🏠" },
-  { label: "Calendar",     href: "/calendar",             emoji: "🗓️", match: (p) => p.startsWith("/calendar") },
-  { label: "Sacraments",   href: "/sacraments/new",       emoji: "⛪",   match: (p) => p.startsWith("/sacraments") },
-  { label: "Transactions", href: "/transactions/new",     emoji: "💳",   match: (p) => p.startsWith("/transactions") },
+  { label: "Dashboard",    href: "/dashboard",            emoji: "\uD83C\uDFE0" },             // 🏠
+  { label: "Calendar",     href: "/calendar",             emoji: "\uD83D\uDCC5", match: (p) => p.startsWith("/calendar") }, // 📅
+  { label: "Sacraments",   href: "/sacraments/new",       emoji: "\u26EA",       match: (p) => p.startsWith("/sacraments") }, // ⛪
+  { label: "Transactions", href: "/transactions/new",     emoji: "\uD83D\uDCB3", match: (p) => p.startsWith("/transactions") }, // 💳
 
   // Accounting parent (for /gl/* and accounting tools)
-  { label: "Accounting",   href: "/gl/accounts",          emoji: "💼",   match: (p) => p.startsWith("/gl/") || p === "/categories" },
+  { label: "Accounting",   href: "/gl/accounts",          emoji: "\uD83D\uDCBC", match: (p) => p.startsWith("/gl/") || p === "/categories" }, // 💼
 
   // Reports (non-accounting only)
-  { label: "Reports",      href: "/reports/transactions", emoji: "📈",   match: (p) => p.startsWith("/reports") },
+  { label: "Reports",      href: "/reports/transactions", emoji: "\uD83D\uDCC8", match: (p) => p.startsWith("/reports") }, // 📈
 
-  { label: "Settings",     href: "/settings",             emoji: "⚙️" },
+  { label: "Settings",     href: "/settings",             emoji: "\u2699\uFE0F" }, // ⚙️
 ];
 
 // Sub-links under Transactions
@@ -33,11 +34,12 @@ const TXN_LINKS = [
   { label: "New Income",  href: "/transactions/income/new" },
 ];
 
-// Sub-links under Accounting (UPDATED: added TB, P&L, BS)
+// Sub-links under Accounting (includes Period Controls)
 const ACCT_LINKS = [
   { label: "Chart of Accounts",     href: "/gl/accounts" },
   { label: "Journal",               href: "/gl/journal"  },
   { label: "Categories (GL Map)",   href: "/categories"  },
+  { label: "Period Controls",       href: "/gl/periods"  }, // keep
   { label: "Trial Balance",         href: "/gl/reports/trial-balance" },
   { label: "Profit & Loss",         href: "/gl/reports/income-statement" },
   { label: "Balance Sheet",         href: "/gl/reports/balance-sheet" },
@@ -122,7 +124,7 @@ export default function CKSidebar() {
       <div className="px-3 pb-3 pt-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-lg">✨</span>
+            <span className="text-lg">{"\u2728"}</span> {/* ✨ */}
             {!collapsed && (
               <div className="text-base font-semibold tracking-tight">ClearKeep</div>
             )}
@@ -133,7 +135,7 @@ export default function CKSidebar() {
             aria-label="Collapse sidebar"
             title={collapsed ? "Expand" : "Collapse"}
           >
-            {collapsed ? "›" : "‹"}
+            {collapsed ? "\u203A" : "\u2039"} {/* › or ‹ */}
           </button>
         </div>
       </div>
@@ -156,7 +158,7 @@ export default function CKSidebar() {
                 aria-label="Toggle Transactions submenu"
                 title="Toggle submenu"
               >
-                {openTx ? "▾" : "▸"}
+                {openTx ? "\u25BE" : "\u25B8"} {/* ▾ or ▸ */}
               </button>
             )}
             {openTx && <SubLinks items={TXN_LINKS} />}
@@ -171,7 +173,7 @@ export default function CKSidebar() {
                 aria-label="Toggle Accounting submenu"
                 title="Toggle submenu"
               >
-                {openAcct ? "▾" : "▸"}
+                {openAcct ? "\u25BE" : "\u25B8"}
               </button>
             )}
             {openAcct && <SubLinks items={ACCT_LINKS} />}
@@ -186,7 +188,7 @@ export default function CKSidebar() {
                 aria-label="Toggle Reports submenu"
                 title="Toggle submenu"
               >
-                {openReports ? "▾" : "▸"}
+                {openReports ? "\u25BE" : "\u25B8"}
               </button>
             )}
             {openReports && <SubLinks items={REPORT_LINKS} />}
@@ -206,7 +208,7 @@ export default function CKSidebar() {
                 href="/sacraments/new"
                 className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
               >
-                ➕ New sacrament
+                {"\u2795"} New sacrament {/* ➕ */}
               </Link>
             </div>
           </>
@@ -230,14 +232,15 @@ export default function CKSidebar() {
       >
         <div className="flex items-center justify-between px-3 py-3">
           <div className="flex items-center gap-2">
-            <span className="text-lg">✨</span>
+            <span className="text-lg">{"\u2728"}</span>
             <div className="text-base font-semibold">ClearKeep</div>
           </div>
           <button
             onClick={() => setOpenMobile(false)}
             className="rounded-lg border px-2 py-1 text-sm"
+            aria-label="Close menu"
           >
-            ✕
+            {"\u2716"} {/* ✖ */}
           </button>
         </div>
         <nav className="flex-1 overflow-y-auto px-2">
@@ -253,7 +256,7 @@ export default function CKSidebar() {
                   className={caretBtn}
                   aria-label="Toggle Transactions submenu"
                 >
-                  {openTx ? "▾" : "▸"}
+                  {openTx ? "\u25BE" : "\u25B8"}
                 </button>
               )}
               {openTx && <SubLinks items={TXN_LINKS} />}
@@ -266,7 +269,7 @@ export default function CKSidebar() {
                   className={caretBtn}
                   aria-label="Toggle Accounting submenu"
                 >
-                  {openAcct ? "▾" : "▸"}
+                  {openAcct ? "\u25BE" : "\u25B8"}
                 </button>
               )}
               {openAcct && <SubLinks items={ACCT_LINKS} />}
@@ -279,7 +282,7 @@ export default function CKSidebar() {
                   className={caretBtn}
                   aria-label="Toggle Reports submenu"
                 >
-                  {openReports ? "▾" : "▸"}
+                  {openReports ? "\u25BE" : "\u25B8"}
                 </button>
               )}
               {openReports && <SubLinks items={REPORT_LINKS} />}
@@ -293,7 +296,7 @@ export default function CKSidebar() {
               href="/sacraments/new"
               className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
-              ➕ New sacrament
+              {"\u2795"} New sacrament
             </Link>
           </div>
         </nav>
@@ -310,7 +313,7 @@ export default function CKSidebar() {
           className="rounded-lg border px-2 py-1 text-sm"
           aria-label="Open menu"
         >
-          ☰
+          {"\u2630"} {/* ☰ */}
         </button>
         <div className="text-sm font-semibold">ClearKeep</div>
         <div className="w-8" />
