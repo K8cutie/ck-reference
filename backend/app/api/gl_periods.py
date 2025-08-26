@@ -15,6 +15,8 @@ from app.services.gl_accounting import (
     reopen_period,
     reclose_period,
 )
+# RBAC guard
+from app.api.rbac import require_permission
 
 router = APIRouter()  # mounted under /gl
 
@@ -29,7 +31,11 @@ def get_db():
 # Single-period endpoints
 # -------------------------
 
-@router.post("/close/{year}-{month}", response_model=JournalEntryOut)
+@router.post(
+    "/close/{year}-{month}",
+    response_model=JournalEntryOut,
+    dependencies=[Depends(require_permission("gl:close"))],
+)
 def api_close_period(
     year: int,
     month: int,
@@ -44,7 +50,10 @@ def api_close_period(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Close period failed: {e}")
 
-@router.post("/reopen/{year}-{month}")
+@router.post(
+    "/reopen/{year}-{month}",
+    dependencies=[Depends(require_permission("gl:reopen"))],
+)
 def api_reopen_period(
     year: int,
     month: int,
@@ -56,7 +65,11 @@ def api_reopen_period(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reopen period failed: {e}")
 
-@router.post("/reclose/{year}-{month}", response_model=JournalEntryOut)
+@router.post(
+    "/reclose/{year}-{month}",
+    response_model=JournalEntryOut,
+    dependencies=[Depends(require_permission("gl:reclose"))],
+)
 def api_reclose_period(
     year: int,
     month: int,
@@ -91,7 +104,10 @@ def _parse_range(start: str, end: str) -> tuple[int, int, int, int]:
         raise HTTPException(status_code=400, detail="end must be >= start")
     return s_year, s_month, e_year, e_month
 
-@router.post("/reclose-range/{start}/{end}")
+@router.post(
+    "/reclose-range/{start}/{end}",
+    dependencies=[Depends(require_permission("gl:reclose:range"))],
+)
 def api_reclose_range(
     start: str,
     end: str,
@@ -128,8 +144,10 @@ def api_reclose_range(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reclose-range failed: {e}")
 
-
-@router.post("/reopen-range/{start}/{end}")
+@router.post(
+    "/reopen-range/{start}/{end}",
+    dependencies=[Depends(require_permission("gl:reopen:range"))],
+)
 def api_reopen_range(
     start: str,
     end: str,
@@ -157,8 +175,10 @@ def api_reopen_range(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reopen-range failed: {e}")
 
-
-@router.post("/close-range/{start}/{end}")
+@router.post(
+    "/close-range/{start}/{end}",
+    dependencies=[Depends(require_permission("gl:close:range"))],
+)
 def api_close_range(
     start: str,
     end: str,
@@ -195,9 +215,8 @@ def api_close_range(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Close-range failed: {e}")
 
-
 # -------------------------
-# Locks status (unchanged)
+# Locks status (left public/read-only)
 # -------------------------
 
 @router.get("/locks/status")
