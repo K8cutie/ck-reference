@@ -5,6 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Iterable, List, Optional
 import json
+import calendar  # for last day of month
 
 from sqlalchemy import select, func, text, and_, or_
 from sqlalchemy.orm import Session
@@ -38,6 +39,19 @@ def _is_period_locked(db: Session, d: date) -> bool:
     )
     row = db.execute(sql, {"period_month": _first_of_month(d)}).first()
     return bool(row and row[0])
+
+def _set_period_lock(db: Session, first: date, is_locked: bool, note: Optional[str] = None) -> None:
+    sql = text(
+        """
+        INSERT INTO gl_period_locks (period_month, is_locked, note)
+        VALUES (:pm, :locked, :note)
+        ON CONFLICT (period_month)
+        DO UPDATE SET is_locked = EXCLUDED.is_locked,
+                      note      = COALESCE(EXCLUDED.note, gl_period_locks.note)
+        """
+    )
+    db.execute(sql, {"pm": first, "locked": is_locked, "note": note})
+    db.commit()
 
 
 # ----------------------------
@@ -135,7 +149,6 @@ def update_gl_account(
         if get_gl_account_by_code(db, code):
             raise ValueError(f"GL account code already exists: {code}")
         acct.code = code
-
     if name and name != acct.name:
         name_exists = db.execute(
             select(GLAccount.id).where(
@@ -148,7 +161,6 @@ def update_gl_account(
         if name_exists:
             raise ValueError(f"GL account name already exists: {name}")
         acct.name = name
-
     if type_:
         acct.type = type_
     if normal_side:
@@ -172,7 +184,6 @@ def update_gl_account(
 
 def get_journal_entry(db: Session, je_id: int) -> Optional[JournalEntry]:
     return db.get(JournalEntry, je_id)
-
 
 def list_journal_entries(
     db: Session,
@@ -407,6 +418,146 @@ def reverse_journal_entry(
 
 
 # ----------------------------
+# Period Close / Reopen (services)
+# ----------------------------
+
+def close_period(
+    db: Session,
+    year: int,
+    month: int,
+    *,
+    equity_account_id: int,
+    note: Optional[str] = None,
+    created_by_user_id: Optional[int] = None,
+) -> JournalEntry:
+    """
+    Close Income/Expense accounts into Equity for the given (year, month).
+    - Creates a single posted JE dated on the LAST day of the month with reference CLOSE-YYYYMM.
+    - Debits each income account by its net credit; credits each expense account by its net debit.
+    - Offsets the net to the provided Equity account (credit for income>expense, debit for loss).
+    - Refuses if the period is locked or already has a posted closing JE.
+    - Locks the month after posting.
+    """
+    first = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    last = date(year, month, last_day)
+
+    if _is_period_locked(db, first):
+        y_m = first.strftime("%Y-%m")
+        raise ValueError(f"Cannot close: period {y_m} is locked.")
+
+    ref = f"CLOSE-{year:04d}{month:02d}"
+    existing = db.execute(
+        select(JournalEntry).where(
+            JournalEntry.reference_no == ref,
+            JournalEntry.is_locked.is_(True),
+        )
+    ).scalar_one_or_none()
+    if existing:
+        raise ValueError(f"Already closed for {year}-{month:02d}.")
+
+    # Aggregate posted activity for the month
+    sql = text(
+        """
+        SELECT a.id AS account_id, a.type AS acct_type, a.code AS code, a.name AS name,
+               COALESCE(SUM(l.debit),0) AS dr, COALESCE(SUM(l.credit),0) AS cr
+        FROM journal_lines l
+        JOIN journal_entries je ON je.id = l.entry_id
+        JOIN gl_accounts a ON a.id = l.account_id
+        WHERE je.is_locked = TRUE
+          AND je.entry_date >= :first AND je.entry_date <= :last
+        GROUP BY a.id, a.type, a.code, a.name
+        """
+    )
+    rows = db.execute(sql, {"first": first, "last": last}).mappings().all()
+
+    income_total = Decimal("0.00")
+    expense_total = Decimal("0.00")
+    lines: List[dict] = []
+
+    for r in rows:
+        acct_type = (r["acct_type"] or "").lower()
+        dr = Decimal(str(r["dr"] or 0))
+        cr = Decimal(str(r["cr"] or 0))
+        if acct_type == "income":
+            net_credit = cr - dr
+            if net_credit > 0:
+                lines.append({
+                    "account_id": int(r["account_id"]),
+                    "description": f"Close income {r['code']}",
+                    "debit": float(net_credit),
+                    "credit": 0.0,
+                })
+                income_total += net_credit
+        elif acct_type == "expense":
+            net_debit = dr - cr
+            if net_debit > 0:
+                lines.append({
+                    "account_id": int(r["account_id"]),
+                    "description": f"Close expense {r['code']}",
+                    "debit": 0.0,
+                    "credit": float(net_debit),
+                })
+                expense_total += net_debit
+
+    # Nothing to close?
+    if not lines and income_total == 0 and expense_total == 0:
+        raise ValueError(f"Nothing to close for {year}-{month:02d}.")
+
+    equity_amt = income_total - expense_total
+    if equity_amt > 0:
+        # Net income -> credit equity
+        lines.append({
+            "account_id": equity_account_id,
+            "description": f"Close {year}-{month:02d} Net Income",
+            "debit": 0.0,
+            "credit": float(equity_amt),
+        })
+    elif equity_amt < 0:
+        # Net loss -> debit equity
+        lines.append({
+            "account_id": equity_account_id,
+            "description": f"Close {year}-{month:02d} Net Loss",
+            "debit": float(-equity_amt),
+            "credit": 0.0,
+        })
+
+    # Create & post the closing JE on the last day
+    je = create_journal_entry(
+        db,
+        entry_date=last,
+        memo=f"Closing Entry {year}-{month:02d}",
+        currency_code="PHP",
+        reference_no=ref,
+        source_module="closing",
+        source_id=ref,
+        lines=lines,
+        created_by_user_id=created_by_user_id,
+    )
+    je = post_journal_entry(db, je.id, posted_by_user_id=created_by_user_id)
+
+    # Lock the period
+    _set_period_lock(db, first, True, note or "closed")
+
+    return je
+
+
+def reopen_period(
+    db: Session,
+    year: int,
+    month: int,
+    *,
+    note: Optional[str] = None,
+) -> dict:
+    """
+    Reopen a previously locked period (does NOT reverse closing entries).
+    """
+    first = date(year, month, 1)
+    _set_period_lock(db, first, False, note or "reopened")
+    return {"period_month": first.isoformat(), "is_locked": False, "note": note or "reopened"}
+
+
+# ----------------------------
 # Books (views) helpers
 # ----------------------------
 
@@ -423,30 +574,41 @@ def fetch_books_view(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
 ) -> List[dict]:
-    """Return rows from one of the BIR books views as list[dict]."""
+    """
+    Return rows from one of the BIR books views as list[dict].
+
+    IMPORTANT: We only show **posted** entries. We inner-join each view to
+    journal_entries on (reference_no, entry_date) and filter je.is_locked = TRUE.
+    """
     if view_key not in BOOK_VIEWS:
         raise ValueError(f"Unknown books view: {view_key}")
 
     view_name = BOOK_VIEWS[view_key]
 
-    where = []
-    params = {}
+    where = ["je.is_locked = TRUE"]
+    params: dict = {}
+
     if date_from:
-        where.append("date >= :date_from")
+        where.append("je.entry_date >= :date_from")
         params["date_from"] = date_from
     if date_to:
-        where.append("date <= :date_to")
+        where.append("je.entry_date <= :date_to")
         params["date_to"] = date_to
 
-    sql = f"SELECT * FROM {view_name}"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    sql = f"""
+        SELECT v.*
+        FROM {view_name} v
+        JOIN journal_entries je
+          ON je.reference_no = v.reference
+         AND je.entry_date   = v.date
+        WHERE {" AND ".join(where)}
+    """
 
     # Stable sort
     if view_key in ("general_journal", "cash_receipts_book", "cash_disbursements_book"):
-        sql += " ORDER BY date, reference"
+        sql += " ORDER BY v.date, v.reference"
     elif view_key == "general_ledger":
-        sql += " ORDER BY account_code, date, reference"
+        sql += " ORDER BY v.account_code, v.date, v.reference"
 
     result = db.execute(text(sql), params)
     return [dict(row._mapping) for row in result]

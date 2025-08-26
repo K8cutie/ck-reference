@@ -11,7 +11,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text  # for simple period-lock check
+from sqlalchemy import text  # for simple period-lock checks where needed
 
 from app.db import SessionLocal
 from app.schemas.gl_accounting import (
@@ -19,9 +19,15 @@ from app.schemas.gl_accounting import (
     JournalEntryCreate, JournalEntryOut,
 )
 from app.services.gl_accounting import (
+    # accounts
     create_gl_account, update_gl_account, list_gl_accounts,
+    # journal
     create_journal_entry, post_journal_entry, list_journal_entries,
-    fetch_books_view, unpost_journal_entry, reverse_journal_entry,
+    unpost_journal_entry, reverse_journal_entry,
+    # reports
+    fetch_books_view,
+    # period services
+    close_period, reopen_period,
 )
 
 # -----------------------------
@@ -245,6 +251,54 @@ def api_opening_balances(payload: JournalEntryCreate, db: Session = Depends(get_
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Opening balances failed: {e}")
+
+# ------------------------------------
+# Period Close / Reopen
+# ------------------------------------
+@gl_router.post("/close/{year}-{month}", response_model=JournalEntryOut)
+def api_close_period(
+    year: int,
+    month: int,
+    equity_account_id: int = Query(..., description="Equity account to receive Net Income/Loss"),
+    note: Optional[str] = Query(None, description="Optional note stored in the period lock"),
+    db: Session = Depends(get_db),
+):
+    """
+    Close Income/Expense into Equity for (year, month). Creates a JE with ref CLOSE-YYYYMM
+    dated on the last day of the month, then locks the month.
+    """
+    try:
+        je = close_period(
+            db,
+            year,
+            month,
+            equity_account_id=equity_account_id,
+            note=note,
+            created_by_user_id=None,
+        )
+        return je
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Close period failed: {e}")
+
+
+@gl_router.post("/reopen/{year}-{month}")
+def api_reopen_period(
+    year: int,
+    month: int,
+    note: Optional[str] = Query(None, description="Reason for reopening"),
+    db: Session = Depends(get_db),
+):
+    """
+    Reopen a previously locked period. Does NOT reverse closing entries.
+    """
+    try:
+        return reopen_period(db, year, month, note=note)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Reopen period failed: {e}")
 
 # ------------------------------------
 # Books (JSON and Export ZIP)
