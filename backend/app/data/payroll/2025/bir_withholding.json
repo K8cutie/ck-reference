@@ -1,0 +1,10 @@
+{
+  "brackets": [
+    { "up_to": 20833,   "base_tax": 0,        "rate": 0.00, "excess_over": 0 },
+    { "up_to": 33333,   "base_tax": 0,        "rate": 0.15, "excess_over": 20833 },
+    { "up_to": 66667,   "base_tax": 1875.00,  "rate": 0.20, "excess_over": 33333 },
+    { "up_to": 166667,  "base_tax": 8541.80,  "rate": 0.25, "excess_over": 66667 },
+    { "up_to": 666667,  "base_tax": 33541.80, "rate": 0.30, "excess_over": 166667 },
+    { "up_to": null,    "base_tax": 183541.80,"rate": 0.35, "excess_over": 666667 }
+  ]
+}

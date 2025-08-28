@@ -1,5 +1,3 @@
-# app/main.py
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -22,13 +20,16 @@ from app.api import (
     funds,
     transfers,
     pledges,
-    reports,         # /reports
-    compliance,      # /compliance (existing)
-    calendar_events, # /calendar
-    sigma,           # /sigma (logs/summary/control-chart)
-    sigma_pareto,    # /sigma (defects + pareto)
-    rbac,            # /rbac
+    reports,          # /reports
+    compliance,       # /compliance (existing)
+    calendar_events,  # /calendar
+    sigma,            # /sigma (logs/summary/control-chart)
+    sigma_pareto,     # /sigma (defects + pareto)
+    rbac,             # /rbac
 )
+
+# Explicit import so payroll is available even if __init__ doesn’t export it
+import app.api.payroll as payroll  # provides payroll.router
 
 # Ops/system endpoints (/health, /version)
 from app.api.system import router as system_router
@@ -65,49 +66,52 @@ app.add_middleware(
 )
 
 # Routers
-app.include_router(system_router)                        # /health, /version
+app.include_router(system_router)  # /health, /version
 
 app.include_router(transactions.router, tags=["Transactions"])  # /transactions (router defines its own prefix)
-app.include_router(categories.router,    prefix="/categories",   tags=["Categories"])
-app.include_router(category_gl_map_router)                       # /categories/{id}/glmap (GET/PATCH)
-app.include_router(parishioners.router,  prefix="/parishioners", tags=["Parishioners"])
+app.include_router(categories.router, prefix="/categories", tags=["Categories"])
+app.include_router(category_gl_map_router)  # /categories/{id}/glmap (GET/PATCH)
+app.include_router(parishioners.router, prefix="/parishioners", tags=["Parishioners"])
 
-# Sacraments router defines its own prefix="/sacraments"
+# Sacraments (router defines its own prefix="/sacraments")
 app.include_router(sacraments.router)
 
 # Expenses
-app.include_router(expenses.router)      # /expenses
+app.include_router(expenses.router)  # /expenses
 
 # Accounts & Funds
-app.include_router(accounts.router)      # /accounts
-app.include_router(funds.router)         # /funds
+app.include_router(accounts.router)  # /accounts
+app.include_router(funds.router)     # /funds
 
 # Transfers & Pledges
-app.include_router(transfers.router)     # /transfers
-app.include_router(pledges.router)       # /pledges
+app.include_router(transfers.router)  # /transfers
+app.include_router(pledges.router)    # /pledges
 
 # Reports
-app.include_router(reports.router)       # /reports
+app.include_router(reports.router)    # /reports
 
 # Compliance (existing module)
-app.include_router(compliance.router)    # /compliance
+app.include_router(compliance.router)  # /compliance
 
 # Calendar
 app.include_router(calendar_events.router)  # /calendar
 
+# Payroll (new)
+app.include_router(payroll.router)  # /payroll
+
 # Six Sigma
-app.include_router(sigma.router)            # /sigma (logs/summary/control-chart)
-app.include_router(sigma_pareto.router)     # /sigma (defects + pareto)
+app.include_router(sigma.router)        # /sigma (logs/summary/control-chart)
+app.include_router(sigma_pareto.router) # /sigma (defects + pareto)
 
 # RBAC (admin)
-app.include_router(rbac.router)             # /rbac
+app.include_router(rbac.router)  # /rbac
 
 # --- Accounting (Books-Only) ---
 app.include_router(gl_accounting_router)    # /gl
 app.include_router(books_compliance_router) # /compliance/books, /compliance/books/export
 
 # --- Period Locks ---
-app.include_router(gl_locks_router)         # /gl/locks
+app.include_router(gl_locks_router)  # /gl/locks
 
 # --- GL Reports ---
 app.include_router(trial_balance_router)    # /gl/reports/trial_balance
