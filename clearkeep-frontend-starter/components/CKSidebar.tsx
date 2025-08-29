@@ -1,4 +1,3 @@
-// components/CKSidebar.tsx
 "use client";
 
 import Link from "next/link";
@@ -8,23 +7,34 @@ import { useEffect, useMemo, useState } from "react";
 type NavItem = {
   label: string;
   href: string;
-  emoji: string; // stored as Unicode escapes to avoid encoding issues
+  emoji: string; // use Unicode escapes to avoid encoding issues
   match?: (p: string) => boolean;
 };
 
-// All emoji values below use Unicode escapes (ASCII-only file) to prevent mojibake
+// Top-level items (some act as group headers via match + sublinks)
 const NAV: NavItem[] = [
-  { label: "Dashboard",    href: "/dashboard",            emoji: "\uD83C\uDFE0" },             // 🏠
+  { label: "Dashboard",    href: "/dashboard",            emoji: "\uD83C\uDFE0" }, // 🏠
   { label: "Calendar",     href: "/calendar",             emoji: "\uD83D\uDCC5", match: (p) => p.startsWith("/calendar") }, // 📅
   { label: "Sacraments",   href: "/sacraments/new",       emoji: "\u26EA",       match: (p) => p.startsWith("/sacraments") }, // ⛪
   { label: "Transactions", href: "/transactions/new",     emoji: "\uD83D\uDCB3", match: (p) => p.startsWith("/transactions") }, // 💳
 
-  // Accounting parent (for /gl/* and accounting tools)
-  { label: "Accounting",   href: "/gl/accounts",          emoji: "\uD83D\uDCBC", match: (p) => p.startsWith("/gl/") || p === "/categories" }, // 💼
+  // People group (employees live under /people/*)
+  {
+    label: "People",
+    href: "/people/employees",
+    emoji: "\uD83D\uDC65",
+    match: (p) => p.startsWith("/people"),
+  }, // 👥
 
-  // Reports (non-accounting only)
+  // Accounting group (GL + Payroll belong here)
+  {
+    label: "Accounting",
+    href: "/gl/accounts",
+    emoji: "\uD83D\uDCBC",
+    match: (p) => p.startsWith("/gl/") || p === "/categories" || p === "/payroll",
+  }, // 💼
+
   { label: "Reports",      href: "/reports/transactions", emoji: "\uD83D\uDCC8", match: (p) => p.startsWith("/reports") }, // 📈
-
   { label: "Settings",     href: "/settings",             emoji: "\u2699\uFE0F" }, // ⚙️
 ];
 
@@ -34,15 +44,21 @@ const TXN_LINKS = [
   { label: "New Income",  href: "/transactions/income/new" },
 ];
 
-// Sub-links under Accounting (includes Period Controls)
+// Sub-links under People — point “New Employee” to /people/new-employee
+const PEOPLE_LINKS = [
+  { label: "Employees",     href: "/people/employees" },
+  { label: "New Employee",  href: "/people/new-employee" },
+];
+
+// Sub-links under Accounting (no Payroll creation here; just core GL pages)
 const ACCT_LINKS = [
-  { label: "Chart of Accounts",     href: "/gl/accounts" },
-  { label: "Journal",               href: "/gl/journal"  },
-  { label: "Categories (GL Map)",   href: "/categories"  },
-  { label: "Period Controls",       href: "/gl/periods"  }, // keep
-  { label: "Trial Balance",         href: "/gl/reports/trial-balance" },
-  { label: "Profit & Loss",         href: "/gl/reports/income-statement" },
-  { label: "Balance Sheet",         href: "/gl/reports/balance-sheet" },
+  { label: "Chart of Accounts",   href: "/gl/accounts" },
+  { label: "Journal",             href: "/gl/journal"  },
+  { label: "Categories (GL Map)", href: "/categories"  },
+  { label: "Period Controls",     href: "/gl/periods"  },
+  { label: "Trial Balance",       href: "/gl/reports/trial-balance" },
+  { label: "Profit & Loss",       href: "/gl/reports/income-statement" },
+  { label: "Balance Sheet",       href: "/gl/reports/balance-sheet" },
 ];
 
 // Sub-links under Reports (non-accounting)
@@ -56,21 +72,24 @@ export default function CKSidebar() {
   const [openMobile, setOpenMobile] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
-  // Auto-open groups when route matches them
-  const txActive   = useMemo(() => pathname.startsWith("/transactions"), [pathname]);
-  const acctActive = useMemo(() => pathname.startsWith("/gl/") || pathname === "/categories", [pathname]);
-  const repActive  = useMemo(() => pathname.startsWith("/reports"), [pathname]);
+  // Auto-open groups based on current route
+  const txActive     = useMemo(() => pathname.startsWith("/transactions"), [pathname]);
+  const peopleActive = useMemo(() => pathname.startsWith("/people"), [pathname]);
+  const acctActive   = useMemo(() => pathname.startsWith("/gl/") || pathname === "/categories" || pathname === "/payroll", [pathname]);
+  const repActive    = useMemo(() => pathname.startsWith("/reports"), [pathname]);
 
   const [openTx, setOpenTx] = useState(txActive);
+  const [openPeople, setOpenPeople] = useState(peopleActive);
   const [openAcct, setOpenAcct] = useState(acctActive);
   const [openReports, setOpenReports] = useState(repActive);
 
   useEffect(() => {
     if (txActive) setOpenTx(true);
+    if (peopleActive) setOpenPeople(true);
     if (acctActive) setOpenAcct(true);
     if (repActive) setOpenReports(true);
     setOpenMobile(false);
-  }, [txActive, acctActive, repActive, pathname]);
+  }, [txActive, peopleActive, acctActive, repActive, pathname]);
 
   const asideBase =
     "h-screen bg-white border-r border-gray-200 shadow-sm flex flex-col";
@@ -142,13 +161,11 @@ export default function CKSidebar() {
 
       <nav className="flex-1 overflow-y-auto px-2">
         <div className="space-y-1">
-          {/* Dashboard */}
-          {TopLink(NAV[0])}
-          {/* Calendar */}
-          {TopLink(NAV[1])}
-          {/* Sacraments */}
-          {TopLink(NAV[2])}
-          {/* Transactions (collapsible) */}
+          {TopLink(NAV[0])} {/* Dashboard */}
+          {TopLink(NAV[1])} {/* Calendar */}
+          {TopLink(NAV[2])} {/* Sacraments */}
+
+          {/* Transactions */}
           <div>
             {TopLink(
               NAV[3],
@@ -163,10 +180,27 @@ export default function CKSidebar() {
             )}
             {openTx && <SubLinks items={TXN_LINKS} />}
           </div>
-          {/* Accounting (collapsible) */}
+
+          {/* People */}
           <div>
             {TopLink(
               NAV[4],
+              <button
+                onClick={() => setOpenPeople((v) => !v)}
+                className={caretBtn}
+                aria-label="Toggle People submenu"
+                title="Toggle submenu"
+              >
+                {openPeople ? "\u25BE" : "\u25B8"}
+              </button>
+            )}
+            {openPeople && <SubLinks items={PEOPLE_LINKS} />}
+          </div>
+
+          {/* Accounting */}
+          <div>
+            {TopLink(
+              NAV[5],
               <button
                 onClick={() => setOpenAcct((v) => !v)}
                 className={caretBtn}
@@ -178,10 +212,11 @@ export default function CKSidebar() {
             )}
             {openAcct && <SubLinks items={ACCT_LINKS} />}
           </div>
-          {/* Reports (collapsible) */}
+
+          {/* Reports */}
           <div>
             {TopLink(
-              NAV[5],
+              NAV[6],
               <button
                 onClick={() => setOpenReports((v) => !v)}
                 className={caretBtn}
@@ -193,8 +228,8 @@ export default function CKSidebar() {
             )}
             {openReports && <SubLinks items={REPORT_LINKS} />}
           </div>
-          {/* Settings */}
-          {TopLink(NAV[6])}
+
+          {TopLink(NAV[7])} {/* Settings */}
         </div>
 
         {!collapsed && (
@@ -251,11 +286,7 @@ export default function CKSidebar() {
             <div>
               {TopLink(
                 NAV[3],
-                <button
-                  onClick={() => setOpenTx((v) => !v)}
-                  className={caretBtn}
-                  aria-label="Toggle Transactions submenu"
-                >
+                <button onClick={() => setOpenTx((v) => !v)} className={caretBtn} aria-label="Toggle Transactions submenu">
                   {openTx ? "\u25BE" : "\u25B8"}
                 </button>
               )}
@@ -264,30 +295,23 @@ export default function CKSidebar() {
             <div>
               {TopLink(
                 NAV[4],
-                <button
-                  onClick={() => setOpenAcct((v) => !v)}
-                  className={caretBtn}
-                  aria-label="Toggle Accounting submenu"
-                >
+                <button onClick={() => setOpenPeople((v) => !v)} className={caretBtn} aria-label="Toggle People submenu">
+                  {openPeople ? "\u25BE" : "\u25B8"}
+                </button>
+              )}
+              {openPeople && <SubLinks items={PEOPLE_LINKS} />}
+            </div>
+            <div>
+              {TopLink(
+                NAV[5],
+                <button onClick={() => setOpenAcct((v) => !v)} className={caretBtn} aria-label="Toggle Accounting submenu">
                   {openAcct ? "\u25BE" : "\u25B8"}
                 </button>
               )}
               {openAcct && <SubLinks items={ACCT_LINKS} />}
             </div>
-            <div>
-              {TopLink(
-                NAV[5],
-                <button
-                  onClick={() => setOpenReports((v) => !v)}
-                  className={caretBtn}
-                  aria-label="Toggle Reports submenu"
-                >
-                  {openReports ? "\u25BE" : "\u25B8"}
-                </button>
-              )}
-              {openReports && <SubLinks items={REPORT_LINKS} />}
-            </div>
             {TopLink(NAV[6])}
+            {TopLink(NAV[7])}
           </div>
 
           <div className="my-4 h-px bg-gray-200" />

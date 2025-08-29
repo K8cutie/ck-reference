@@ -18,7 +18,13 @@ try:
 except Exception:  # pragma: no cover
     from app.db import get_db as _get_db
 
-from app.models.payroll import Employee, PayrollPeriod, PayrollRun, Payslip
+from app.models.payroll import (
+    Employee,
+    EmployeeCompHistory,   # <-- NEW
+    PayrollPeriod,
+    PayrollRun,
+    Payslip,
+)
 from app.services.gl_accounting import create_journal_entry, post_journal_entry
 
 # rates helpers (used for detailed GL posting & summaries)
@@ -42,17 +48,40 @@ def _employee_out(emp: Employee) -> Dict[str, Any]:
         "first_name": emp.first_name,
         "last_name": emp.last_name,
         "active": emp.active,
+
+        # Pay & rates
         "pay_type": emp.pay_type,
         "monthly_rate": emp.monthly_rate,
         "daily_rate": emp.daily_rate,
         "hourly_rate": emp.hourly_rate,
+
+        # Gov/tax
         "tax_status": emp.tax_status,
         "sss_no": emp.sss_no,
         "philhealth_no": emp.philhealth_no,
         "pagibig_no": emp.pagibig_no,
         "tin": emp.tin,
+
+        # Employment dates
         "hire_date": emp.hire_date,
         "termination_date": emp.termination_date,
+
+        # Contact & address
+        "contact_no": getattr(emp, "contact_no", None),
+        "email": getattr(emp, "email", None),
+        "address_line1": getattr(emp, "address_line1", None),
+        "address_line2": getattr(emp, "address_line2", None),
+        "barangay": getattr(emp, "barangay", None),
+        "city": getattr(emp, "city", None),
+        "province": getattr(emp, "province", None),
+        "postal_code": getattr(emp, "postal_code", None),
+        "country": getattr(emp, "country", None),
+
+        # Emergency & notes
+        "emergency_contact_name": getattr(emp, "emergency_contact_name", None),
+        "emergency_contact_no": getattr(emp, "emergency_contact_no", None),
+        "notes": getattr(emp, "notes", None),
+
         "meta": emp.meta or {},
         "created_at": emp.created_at,
     }
@@ -95,24 +124,68 @@ def _payslip_out(s: Payslip) -> Dict[str, Any]:
         "created_at": s.created_at,
     }
 
+def _comp_hist_out(h: EmployeeCompHistory) -> Dict[str, Any]:
+    return {
+        "id": h.id,
+        "employee_id": h.employee_id,
+        "effective_date": h.effective_date,
+        "change_type": h.change_type,
+        "reason": h.reason,
+        "old_pay_type": h.old_pay_type,
+        "new_pay_type": h.new_pay_type,
+        "old_monthly_rate": h.old_monthly_rate,
+        "new_monthly_rate": h.new_monthly_rate,
+        "old_daily_rate": h.old_daily_rate,
+        "new_daily_rate": h.new_daily_rate,
+        "old_hourly_rate": h.old_hourly_rate,
+        "new_hourly_rate": h.new_hourly_rate,
+        "notes": h.notes,
+        "created_at": h.created_at,
+    }
+
 # ----------------------------- basic CRUD ----------------------------- #
 
 class EmployeeCreate(BaseModel):
+    # Identity
     code: str
     first_name: str
     last_name: str
     active: bool = True
-    pay_type: str
+
+    # Pay
+    pay_type: str  # monthly | daily | hourly
     monthly_rate: Optional[Decimal] = None
     daily_rate: Optional[Decimal] = None
     hourly_rate: Optional[Decimal] = None
+
+    # Gov/tax
     tax_status: Optional[str] = None
     sss_no: Optional[str] = None
     philhealth_no: Optional[str] = None
     pagibig_no: Optional[str] = None
     tin: Optional[str] = None
+
+    # Employment dates
     hire_date: Optional[date] = None
     termination_date: Optional[date] = None
+
+    # Contact & address
+    contact_no: Optional[str] = None
+    email: Optional[str] = None
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    barangay: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+
+    # Emergency & notes
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_no: Optional[str] = None
+    notes: Optional[str] = None
+
+    # Misc
     meta: Dict[str, Any] = {}
 
 @router.post("/employees")
@@ -122,6 +195,127 @@ def api_create_employee(payload: EmployeeCreate, db: Session = Depends(_get_db))
     db.commit()
     db.refresh(emp)
     return _employee_out(emp)
+
+# Employees list/read — NOW WITH SEARCH & ACTIVE FILTER
+@router.get("/employees")
+def api_list_employees(
+    q: Optional[str] = Query(None, description="Search code, first/last name, email, city, province"),
+    active: Optional[bool] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(_get_db),
+):
+    qry = db.query(Employee)
+    if q:
+        term = f"%{q}%"
+        qry = qry.filter(
+            sa.or_(
+                Employee.code.ilike(term),
+                Employee.first_name.ilike(term),
+                Employee.last_name.ilike(term),
+                Employee.email.ilike(term),
+                Employee.city.ilike(term),
+                Employee.province.ilike(term),
+            )
+        )
+    if active is not None:
+        qry = qry.filter(Employee.active == active)
+
+    rows = (
+        qry.order_by(sa.desc(Employee.created_at))
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [_employee_out(e) for e in rows]
+
+@router.get("/employees/{employee_id}")
+def api_get_employee(employee_id: UUID, db: Session = Depends(_get_db)):
+    emp = db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return _employee_out(emp)
+
+# ---------- NEW: record a compensation change (promotion / salary increase) ---------- #
+
+class EmployeeCompChangeIn(BaseModel):
+    effective_date: date = Field(..., description="Date when the new rate takes effect")
+    change_type: Optional[str] = Field(None, description="e.g., 'promotion', 'adjustment'")
+    reason: Optional[str] = None
+
+    # any of these may be supplied; at least one must be present
+    new_pay_type: Optional[str] = None  # monthly | daily | hourly
+    new_monthly_rate: Optional[Decimal] = None
+    new_daily_rate: Optional[Decimal] = None
+    new_hourly_rate: Optional[Decimal] = None
+
+    notes: Optional[str] = None
+
+@router.post("/employees/{employee_id}/comp-change")
+def api_employee_comp_change(
+    employee_id: UUID,
+    payload: EmployeeCompChangeIn,
+    db: Session = Depends(_get_db),
+):
+    emp = db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    if (
+        payload.new_pay_type is None
+        and payload.new_monthly_rate is None
+        and payload.new_daily_rate is None
+        and payload.new_hourly_rate is None
+    ):
+        raise HTTPException(status_code=400, detail="Provide at least one of new_pay_type/new_*_rate")
+
+    # Capture old values
+    old_pay_type = str(emp.pay_type) if emp.pay_type is not None else None
+    old_monthly = emp.monthly_rate
+    old_daily = emp.daily_rate
+    old_hourly = emp.hourly_rate
+
+    # Compute new values (default to current if not provided so history is explicit)
+    new_pay_type = payload.new_pay_type or old_pay_type
+    new_monthly = payload.new_monthly_rate if payload.new_monthly_rate is not None else old_monthly
+    new_daily = payload.new_daily_rate if payload.new_daily_rate is not None else old_daily
+    new_hourly = payload.new_hourly_rate if payload.new_hourly_rate is not None else old_hourly
+
+    # Insert history row
+    hist = EmployeeCompHistory(
+        employee_id=employee_id,
+        effective_date=payload.effective_date,
+        change_type=payload.change_type,
+        reason=payload.reason,
+        old_pay_type=old_pay_type,
+        new_pay_type=new_pay_type,
+        old_monthly_rate=old_monthly,
+        new_monthly_rate=new_monthly,
+        old_daily_rate=old_daily,
+        new_daily_rate=new_daily,
+        old_hourly_rate=old_hourly,
+        new_hourly_rate=new_hourly,
+        notes=payload.notes,
+    )
+    db.add(hist)
+
+    # Update current employee record to the new values
+    if new_pay_type is not None:
+        emp.pay_type = new_pay_type  # relies on DB enum check; will fail if invalid
+    emp.monthly_rate = new_monthly
+    emp.daily_rate = new_daily
+    emp.hourly_rate = new_hourly
+
+    db.commit()
+    db.refresh(emp)
+    db.refresh(hist)
+
+    return {
+        "employee": _employee_out(emp),
+        "change": _comp_hist_out(hist),
+    }
+
+# ----------------------------- periods / runs / payslips ----------------------------- #
 
 class PayrollPeriodCreate(BaseModel):
     period_key: str
@@ -478,7 +672,7 @@ def _render_payslip_html(emp: Employee, period: PayrollPeriod, slip: Payslip) ->
 
 @router.get("/payslips/{payslip_id}.html", response_class=HTMLResponse)
 def api_get_payslip_html(payslip_id: UUID, db: Session = Depends(_get_db)):
-    slip = db.get(Payslip, payslip_id)
+    slip = db.get(Payslip, payslips_id)  # <-- typo fix below
     if not slip:
         raise HTTPException(status_code=404, detail="Payslip not found")
     emp = db.get(Employee, slip.employee_id)

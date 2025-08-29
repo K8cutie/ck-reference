@@ -2,13 +2,14 @@
 """
 Payroll ORM models for ClearKeep.
 
-Tables (must match a7a3d2b18c01_payroll_base migration):
+Tables:
 - employees
 - payroll_periods
 - payroll_runs
 - payroll_items
 - payslips
 - payroll_configs
+- employee_comp_history   <-- NEW (tracks promotions / salary changes)
 """
 
 from __future__ import annotations
@@ -37,7 +38,6 @@ from app.db import Base
 
 
 # ---------- Enums (bind to existing DB enum types; do NOT create new ones) ----------
-# Use the explicit value lists and names from the migration; avoid re-creating types.
 EmployeePayType = postgresql.ENUM(
     "monthly", "daily", "hourly", name="employee_pay_type", create_type=False
 )
@@ -67,21 +67,42 @@ class Employee(Base):
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
 
+    # Contact & address
+    contact_no: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    address_line1: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    address_line2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    barangay: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    province: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Employment status
     hire_date: Mapped[Optional[date]] = mapped_column(Date(), nullable=True)
     termination_date: Mapped[Optional[date]] = mapped_column(Date(), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
 
+    # Pay & rates
     pay_type: Mapped[str] = mapped_column(EmployeePayType, nullable=False)
     monthly_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     daily_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     hourly_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
 
+    # Gov/tax
     tax_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     sss_no: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     philhealth_no: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     pagibig_no: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     tin: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
+    # Emergency & notes
+    emergency_contact_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    emergency_contact_no: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
+
+    # Misc
     meta: Mapped[dict] = mapped_column(postgresql.JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -94,9 +115,52 @@ class Employee(Base):
     payslips: Mapped[list["Payslip"]] = relationship(
         back_populates="employee", cascade="all, delete-orphan"
     )
+    comp_history: Mapped[list["EmployeeCompHistory"]] = relationship(   # NEW
+        back_populates="employee", cascade="all, delete-orphan", order_by="desc(EmployeeCompHistory.effective_date)"
+    )
 
     def __repr__(self) -> str:
         return f"<Employee {self.code} {self.last_name}>"
+
+
+class EmployeeCompHistory(Base):
+    """
+    Tracks changes in compensation (promotions, rate adjustments) for an employee.
+    Mirrors columns in the migration 4c95c4046b3e.
+    """
+    __tablename__ = "employee_comp_history"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        postgresql.UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False
+    )
+
+    effective_date: Mapped[date] = mapped_column(Date(), nullable=False)
+    change_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)  # e.g., promotion, adjustment
+    reason: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
+
+    # Old/New pay types & rates
+    old_pay_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    new_pay_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    old_monthly_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    new_monthly_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    old_daily_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    new_daily_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    old_hourly_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    new_hourly_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+
+    notes: Mapped[Optional[str]] = mapped_column(Text(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    # Relationship
+    employee: Mapped["Employee"] = relationship(back_populates="comp_history")
+
+    def __repr__(self) -> str:
+        return f"<EmployeeCompHistory emp={self.employee_id} eff={self.effective_date}>"
 
 
 class PayrollPeriod(Base):
