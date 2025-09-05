@@ -1,0 +1,26 @@
+{
+  "target_url": "postgresql+psycopg2://ckchurch_app:cksecret@localhost:5432/sampletest",
+  "window": [
+    "2023-01-01",
+    "2025-08-31"
+  ],
+  "profile": "parish_medium",
+  "dry_run": false,
+  "categories_upserted": 0,
+  "parishioners_created": 2000,
+  "sacraments_created": {
+    "baptism": 543,
+    "marriage": 183,
+    "death": 348,
+    "confirmation": 321,
+    "first_communion": 292
+  },
+  "tx_created_estimate": 2313,
+  "tx_income_estimate": "5990930.08",
+  "tx_expense_estimate": "1672482.20",
+  "total_transactions_in_window_after": 3952,
+  "offertory_avg": {
+    "sunday_income_avg": "7883.25",
+    "weekday_income_avg": "918.88"
+  }
+}

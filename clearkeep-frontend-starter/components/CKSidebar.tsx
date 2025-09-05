@@ -31,6 +31,7 @@ const NAV: NavItem[] = [
     label: "Accounting",
     href: "/gl/accounts",
     emoji: "\uD83D\uDCBC",
+    // include /payroll so the group highlights there
     match: (p) => p.startsWith("/gl/") || p === "/categories" || p === "/payroll",
   }, // 💼
 
@@ -44,16 +45,17 @@ const TXN_LINKS = [
   { label: "New Income",  href: "/transactions/income/new" },
 ];
 
-// Sub-links under People — point “New Employee” to /people/new-employee
+// Sub-links under People
 const PEOPLE_LINKS = [
   { label: "Employees",     href: "/people/employees" },
   { label: "New Employee",  href: "/people/new-employee" },
 ];
 
-// Sub-links under Accounting (no Payroll creation here; just core GL pages)
+// Sub-links under Accounting — ✅ Payroll added back
 const ACCT_LINKS = [
   { label: "Chart of Accounts",   href: "/gl/accounts" },
   { label: "Journal",             href: "/gl/journal"  },
+  { label: "Payroll",             href: "/payroll"     }, // <— here
   { label: "Categories (GL Map)", href: "/categories"  },
   { label: "Period Controls",     href: "/gl/periods"  },
   { label: "Trial Balance",       href: "/gl/reports/trial-balance" },
@@ -61,7 +63,7 @@ const ACCT_LINKS = [
   { label: "Balance Sheet",       href: "/gl/reports/balance-sheet" },
 ];
 
-// Sub-links under Reports (non-accounting)
+// Sub-links under Reports
 const REPORT_LINKS = [
   { label: "Transactions", href: "/reports/transactions" },
   { label: "Parishioners", href: "/reports/parishioners" },
@@ -161,9 +163,9 @@ export default function CKSidebar() {
 
       <nav className="flex-1 overflow-y-auto px-2">
         <div className="space-y-1">
-          {TopLink(NAV[0])} {/* Dashboard */}
-          {TopLink(NAV[1])} {/* Calendar */}
-          {TopLink(NAV[2])} {/* Sacraments */}
+          {TopLink(NAV[0])}
+          {TopLink(NAV[1])}
+          {TopLink(NAV[2])}
 
           {/* Transactions */}
           <div>
@@ -175,7 +177,7 @@ export default function CKSidebar() {
                 aria-label="Toggle Transactions submenu"
                 title="Toggle submenu"
               >
-                {openTx ? "\u25BE" : "\u25B8"} {/* ▾ or ▸ */}
+                {openTx ? "\u25BE" : "\u25B8"}
               </button>
             )}
             {openTx && <SubLinks items={TXN_LINKS} />}
@@ -213,23 +215,8 @@ export default function CKSidebar() {
             {openAcct && <SubLinks items={ACCT_LINKS} />}
           </div>
 
-          {/* Reports */}
-          <div>
-            {TopLink(
-              NAV[6],
-              <button
-                onClick={() => setOpenReports((v) => !v)}
-                className={caretBtn}
-                aria-label="Toggle Reports submenu"
-                title="Toggle submenu"
-              >
-                {openReports ? "\u25BE" : "\u25B8"}
-              </button>
-            )}
-            {openReports && <SubLinks items={REPORT_LINKS} />}
-          </div>
-
-          {TopLink(NAV[7])} {/* Settings */}
+          {TopLink(NAV[6])}
+          {TopLink(NAV[7])}
         </div>
 
         {!collapsed && (
