@@ -35,8 +35,9 @@ const NAV: NavItem[] = [
     match: (p) => p.startsWith("/gl/") || p === "/categories" || p === "/payroll",
   }, // 💼
 
-  { label: "Reports",      href: "/reports/transactions", emoji: "\uD83D\uDCC8", match: (p) => p.startsWith("/reports") }, // 📈
-  { label: "Settings",     href: "/settings",             emoji: "\u2699\uFE0F" }, // ⚙️
+  // UPDATED: Reports group also matches /quality/* so it highlights on Six Sigma
+  { label: "Reports", href: "/reports/transactions", emoji: "\uD83D\uDCC8", match: (p) => p.startsWith("/reports") || p.startsWith("/quality/") }, // 📈
+  { label: "Settings", href: "/settings", emoji: "\u2699\uFE0F" }, // ⚙️
 ];
 
 // Sub-links under Transactions
@@ -51,11 +52,11 @@ const PEOPLE_LINKS = [
   { label: "New Employee",  href: "/people/new-employee" },
 ];
 
-// Sub-links under Accounting — ✅ Payroll added back
+// Sub-links under Accounting — ✅ Payroll kept here
 const ACCT_LINKS = [
   { label: "Chart of Accounts",   href: "/gl/accounts" },
   { label: "Journal",             href: "/gl/journal"  },
-  { label: "Payroll",             href: "/payroll"     }, // <— here
+  { label: "Payroll",             href: "/payroll"     },
   { label: "Categories (GL Map)", href: "/categories"  },
   { label: "Period Controls",     href: "/gl/periods"  },
   { label: "Trial Balance",       href: "/gl/reports/trial-balance" },
@@ -63,10 +64,11 @@ const ACCT_LINKS = [
   { label: "Balance Sheet",       href: "/gl/reports/balance-sheet" },
 ];
 
-// Sub-links under Reports
+// Sub-links under Reports — ✅ Six Sigma moved here
 const REPORT_LINKS = [
-  { label: "Transactions", href: "/reports/transactions" },
-  { label: "Parishioners", href: "/reports/parishioners" },
+  { label: "Quality (Six Sigma)", href: "/quality/six-sigma" },
+  { label: "Transactions",        href: "/reports/transactions" },
+  { label: "Parishioners",        href: "/reports/parishioners" },
 ];
 
 export default function CKSidebar() {
@@ -78,7 +80,8 @@ export default function CKSidebar() {
   const txActive     = useMemo(() => pathname.startsWith("/transactions"), [pathname]);
   const peopleActive = useMemo(() => pathname.startsWith("/people"), [pathname]);
   const acctActive   = useMemo(() => pathname.startsWith("/gl/") || pathname === "/categories" || pathname === "/payroll", [pathname]);
-  const repActive    = useMemo(() => pathname.startsWith("/reports"), [pathname]);
+  // UPDATED: Reports group opens on /reports/* and /quality/*
+  const repActive    = useMemo(() => pathname.startsWith("/reports") || pathname.startsWith("/quality/"), [pathname]);
 
   const [openTx, setOpenTx] = useState(txActive);
   const [openPeople, setOpenPeople] = useState(peopleActive);
@@ -215,7 +218,22 @@ export default function CKSidebar() {
             {openAcct && <SubLinks items={ACCT_LINKS} />}
           </div>
 
-          {TopLink(NAV[6])}
+          {/* Reports (includes Quality/Six Sigma) */}
+          <div>
+            {TopLink(
+              NAV[6],
+              <button
+                onClick={() => setOpenReports((v) => !v)}
+                className={caretBtn}
+                aria-label="Toggle Reports submenu"
+                title="Toggle submenu"
+              >
+                {openReports ? "\u25BE" : "\u25B8"}
+              </button>
+            )}
+            {openReports && <SubLinks items={REPORT_LINKS} />}
+          </div>
+
           {TopLink(NAV[7])}
         </div>
 
@@ -297,7 +315,15 @@ export default function CKSidebar() {
               )}
               {openAcct && <SubLinks items={ACCT_LINKS} />}
             </div>
-            {TopLink(NAV[6])}
+            <div>
+              {TopLink(
+                NAV[6],
+                <button onClick={() => setOpenReports((v) => !v)} className={caretBtn} aria-label="Toggle Reports submenu">
+                  {openReports ? "\u25BE" : "\u25B8"}
+                </button>
+              )}
+              {openReports && <SubLinks items={REPORT_LINKS} />}
+            </div>
             {TopLink(NAV[7])}
           </div>
 
