@@ -35,7 +35,7 @@ const NAV: NavItem[] = [
     match: (p) => p.startsWith("/gl/") || p === "/categories" || p === "/payroll",
   }, // 💼
 
-  // UPDATED: Reports group also matches /quality/* so it highlights on Six Sigma
+  // Reports group also matches /quality/* so it highlights on Six Sigma
   { label: "Reports", href: "/reports/transactions", emoji: "\uD83D\uDCC8", match: (p) => p.startsWith("/reports") || p.startsWith("/quality/") }, // 📈
   { label: "Settings", href: "/settings", emoji: "\u2699\uFE0F" }, // ⚙️
 ];
@@ -64,8 +64,9 @@ const ACCT_LINKS = [
   { label: "Balance Sheet",       href: "/gl/reports/balance-sheet" },
 ];
 
-// Sub-links under Reports — ✅ Six Sigma moved here
+// Sub-links under Reports — ✅ add Financial Analysis here
 const REPORT_LINKS = [
+  { label: "Financial Analysis",  href: "/reports/financial-analysis" },
   { label: "Quality (Six Sigma)", href: "/quality/six-sigma" },
   { label: "Transactions",        href: "/reports/transactions" },
   { label: "Parishioners",        href: "/reports/parishioners" },
@@ -80,7 +81,7 @@ export default function CKSidebar() {
   const txActive     = useMemo(() => pathname.startsWith("/transactions"), [pathname]);
   const peopleActive = useMemo(() => pathname.startsWith("/people"), [pathname]);
   const acctActive   = useMemo(() => pathname.startsWith("/gl/") || pathname === "/categories" || pathname === "/payroll", [pathname]);
-  // UPDATED: Reports group opens on /reports/* and /quality/*
+  // Reports group opens on /reports/* and /quality/*
   const repActive    = useMemo(() => pathname.startsWith("/reports") || pathname.startsWith("/quality/"), [pathname]);
 
   const [openTx, setOpenTx] = useState(txActive);

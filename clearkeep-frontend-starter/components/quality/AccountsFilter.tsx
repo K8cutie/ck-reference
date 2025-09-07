@@ -1,10 +1,10 @@
 "use client";
 
 import React from "react";
+import type { Domain } from "../../lib/quality/accounting";
+import { accountType } from "../../lib/quality/accounting";
 
 /** Keep types local so the component stays drop‑in and “dumb”. */
-export type Domain = "expense" | "revenue" | "all";
-
 export type Account = {
   id: number | string;
   name?: string;
@@ -35,13 +35,6 @@ export type AccountsFilterProps = {
 };
 
 /** Same categorization logic as the page (duplicated here to keep the component self-contained). */
-function accountType(a: Account | undefined): string {
-  if (!a) return "other";
-  const t = (a.type || a.account_type || a.kind || a.group || "").toString().toLowerCase();
-  if (t.includes("expens")) return "expense";
-  if (t.includes("revenue") || t.includes("income") || t === "sales") return "revenue";
-  return t || "other";
-}
 
 export default function AccountsFilter({
   title,
@@ -56,73 +49,77 @@ export default function AccountsFilter({
 }: AccountsFilterProps) {
   const cardStyle: React.CSSProperties = {
     border: "1px solid #e5e7eb",
-    borderRadius: 8,
+    borderRadius: 12,
     padding: 12,
     background: "#fff",
-    marginBottom: 12,
-  };
-
-  const headerStyle: React.CSSProperties = {
-    display: "flex",
-    gap: 12,
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
-  };
-
-  const inputStyle: React.CSSProperties = {
-    padding: 8,
-    border: "1px solid #d1d5db",
-    borderRadius: 6,
-    width: 320,
   };
 
   const gridStyle: React.CSSProperties = {
     display: "grid",
-    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-    gap: 6,
-    maxHeight: 220,
-    overflowY: "auto",
+    gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+    gap: 8,
+    alignItems: "start",
   };
 
   const filtered = React.useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = (accounts || []).filter((a) => {
-      const t = accountType(a);
+    const q = (search || "").toLowerCase().trim();
+    let list = (accounts || []).filter((a) => {
+      const t = accountType(a as any);
       if (domain === "expense" && t !== "expense") return false;
       if (domain === "revenue" && t !== "revenue") return false;
-      if (!q) return true;
-      const hay = `${a.name || ""} ${a.code || ""}`.toLowerCase();
-      return hay.includes(q);
+      if (domain === "all" && !(t === "expense" || t === "revenue")) return false;
+      return true;
     });
-    return list.sort(
-      (a, b) =>
-        (a.code || "").localeCompare(b.code || "") ||
-        (a.name || "").localeCompare(b.name || "")
-    );
-  }, [accounts, domain, search]);
 
-  const toggle = (id: string | number) =>
-    setSelected(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);
+    if (q) {
+      list = list.filter((a) =>
+        (a.name || "").toLowerCase().includes(q) || (a.code || "").toLowerCase().includes(q)
+      );
+    }
 
-  const clearSelection = () => setSelected([]);
-  const selectAllShown = () => setSelected(filtered.map((a) => a.id));
+    // Stable-ish sort: revenue/expense first, then by code, then by name.
+    list.sort((a, b) => {
+      const ta = accountType(a as any);
+      const tb = accountType(b as any);
+      const rank = (t: string) => (t === "revenue" || t === "expense" ? 0 : 1);
+      const ra = rank(ta), rb = rank(tb);
+      if (ra !== rb) return ra - rb;
+      const ca = (a.code || "");
+      const cb = (b.code || "");
+      if (ca !== cb) return ca.localeCompare(cb);
+      const na = (a.name || "");
+      const nb = (b.name || "");
+      return na.localeCompare(nb);
+    });
+
+    return list;
+  }, [accounts, search, domain]);
+
+  const toggle = (id: string | number, checked: boolean) => {
+    const set = new Set(selected.map(String));
+    if (checked) set.add(String(id)); else set.delete(String(id));
+    setSelected(Array.from(set));
+  };
 
   return (
-    <div style={cardStyle} role="region" aria-label="Accounts filter">
-      <div style={headerStyle}>
-        <div style={{ fontWeight: 600 }}>
-          {title ?? "Accounts"} ({domain})
-        </div>
+    <div style={cardStyle}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontWeight: 600 }}>{title || "Accounts"}</div>
         <input
-          type="text"
-          placeholder="Search account name or code…"
           value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
-          style={inputStyle}
-          aria-label="Search accounts"
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search account name or code…"
+          style={{
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            minWidth: 220,
+          }}
         />
       </div>
+
+      <div style={{ height: 8 }} />
 
       {loading ? (
         <div style={{ fontSize: 12, color: "#6b7280" }}>Loading accounts…</div>
@@ -139,46 +136,37 @@ export default function AccountsFilter({
             >
               <input
                 type="checkbox"
-                checked={selected.includes(a.id)}
-                onChange={() => toggle(a.id)}
-                aria-label={`Toggle ${a.code ? `${a.code} — ` : ""}${a.name || `Account ${String(a.id)}`}`}
+                checked={selected.map(String).includes(String(a.id))}
+                onChange={(e) => toggle(a.id, e.target.checked)}
+                style={{ width: 14, height: 14 }}
               />
-              <span style={{ fontSize: 12, color: "#374151" }}>
+              <span style={{ fontSize: 12, color: "#111827" }}>
                 {(a.code ? `${a.code} — ` : "") + (a.name || `Account ${String(a.id)}`)}
               </span>
+              <span style={{ fontSize: 11, color: "#6b7280" }}>({accountType(a as any)})</span>
             </label>
           ))}
-          {filtered.length === 0 && (
-            <div style={{ fontSize: 12, color: "#6b7280", padding: "4px 6px" }}>
-              No accounts match your filters.
-            </div>
-          )}
         </div>
       )}
 
-      <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+      <div style={{ height: 8 }} />
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <button
-          onClick={clearSelection}
+          onClick={() => setSelected([])}
           style={{
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
             padding: "6px 10px",
-            border: "1px solid #d1d5db",
-            borderRadius: 6,
-            background: "#f9fafb",
+            fontSize: 12,
+            background: "#fff",
           }}
         >
-          Clear selection
+          Clear
         </button>
-        <button
-          onClick={selectAllShown}
-          style={{
-            padding: "6px 10px",
-            border: "1px solid #d1d5db",
-            borderRadius: 6,
-            background: "#f9fafb",
-          }}
-        >
-          Select all shown
-        </button>
+        <div style={{ fontSize: 12, color: "#6b7280" }}>
+          Selected: {selected.length}
+        </div>
       </div>
     </div>
   );
