@@ -15,11 +15,16 @@ import {
 } from "../../../lib/quality/selectors";
 import { getReceiptCategoryRules } from "../../../lib/quality/receipts_categories";
 
+// Projections (for Budget)
+import { projectReceipts } from "../../../lib/quality/projections";
+
 // Presentational
 import ReceiptsMatrixSection from "../../../components/quality/sections/ReceiptsMatrixSection";
 import ProjectionsSection from "../../../components/quality/sections/ProjectionsSection";
 import AccountsCatalog from "../../../components/quality/sections/AccountsCatalog";
 import IncomeVsExpensesChart from "../../../components/quality/sections/IncomeVsExpensesChart";
+import VarianceSection from "../../../components/quality/sections/VarianceSection";
+import BudgetVsRevExpChart from "../../../components/quality/sections/BudgetVsRevExpChart";
 import { Section } from "../../../components/quality/ui";
 
 // Minimal local types to help TS (matches your API shape loosely)
@@ -252,6 +257,17 @@ export default function FinancialAnalysisPage() {
     [netByMonth]
   );
 
+  // ---------- Budget for Variance (simple uplift control) ----------
+  const [budgetUpliftPct, setBudgetUpliftPct] = useState<number>(0); // % applied to Actuals to form Budget
+  const budgetMatrix = useMemo(() => {
+    return projectReceipts(revenueMatrix, {
+      globalPct: (budgetUpliftPct || 0) / 100,
+      monthlyFactors: new Array(12).fill(1),
+      rounding: "none",
+      compounding: false,
+    });
+  }, [revenueMatrix, budgetUpliftPct]);
+
   return (
     <main style={{ padding: 16 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Reports — Financial Analysis</h1>
@@ -399,13 +415,49 @@ export default function FinancialAnalysisPage() {
             </Section>
           )}
 
-          {/* VARIANCE (stub for next step) */}
+          {/* VARIANCE */}
           {tab === "variance" && (
-            <Section title="Variance (Actual vs Budget)">
-              <div style={{ padding: 12, border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff", color: "#6b7280", fontSize: 12 }}>
-                We’ll add a Variance matrix here next (A vs B with abs/% deltas and color cues).
-              </div>
-            </Section>
+            <>
+              <Section title="Budget Controls">
+                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "#6b7280" }}>Budget uplift (%)</span>
+                    <input
+                      type="number"
+                      step={0.1}
+                      value={budgetUpliftPct}
+                      onChange={(e)=>setBudgetUpliftPct(Number(e.target.value))}
+                      style={{ width: 120, border: "1px solid #d1d5db", borderRadius: 6, padding: "6px 8px", textAlign: "right" }}
+                    />
+                  </label>
+                  <div style={{ color: "#6b7280", fontSize: 12 }}>
+                    Tip: +3% approximates inflation; negative values tighten the budget.
+                  </div>
+                </div>
+              </Section>
+
+              <div style={{ height: 12 }} />
+
+              {/* 3-way comparison chart: bars = Budget, lines = Revenue & Expenses */}
+              <Section title="Budget vs Revenue & Expenses">
+                <BudgetVsRevExpChart
+                  months={revenueMatrix.months}
+                  budget={budgetMatrix.colTotals}
+                  revenue={revenueMatrix.colTotals}
+                  expenses={expenseMatrix.colTotals}
+                />
+              </Section>
+
+              <div style={{ height: 12 }} />
+
+              <VarianceSection
+                title="Variance — Actual (Revenue) vs Budget"
+                actual={revenueMatrix}
+                budget={budgetMatrix}
+                format={(n)=>`₱ ${fmt(n)}`}
+                positiveIsGood={false} // below budget = good (green), over budget = bad (red)
+              />
+            </>
           )}
 
           {/* CATALOG */}
