@@ -11,9 +11,9 @@ import { fmt } from "../../../lib/quality/format";
 import {
   buildReceiptsMatrix,
   type Range,
-  type CategoryRule,
 } from "../../../lib/quality/selectors";
 import { getReceiptCategoryRules } from "../../../lib/quality/receipts_categories";
+import { getExpenseCategoryRules } from "../../../lib/quality/expenses_categories";
 
 // Projections (for Budget)
 import { projectReceipts } from "../../../lib/quality/projections";
@@ -25,6 +25,7 @@ import AccountsCatalog from "../../../components/quality/sections/AccountsCatalo
 import IncomeVsExpensesChart from "../../../components/quality/sections/IncomeVsExpensesChart";
 import VarianceSection from "../../../components/quality/sections/VarianceSection";
 import BudgetVsRevExpChart from "../../../components/quality/sections/BudgetVsRevExpChart";
+import JournalLinesDrawer, { type JournalLineRow } from "../../../components/quality/sections/JournalLinesDrawer";
 import { Section } from "../../../components/quality/ui";
 
 // Minimal local types to help TS (matches your API shape loosely)
@@ -151,6 +152,14 @@ function Controls({
   );
 }
 
+// helpers
+function relabelMonthsToYear(months: string[], year: number): string[] {
+  return months.map((m) => `${year}-${m.slice(5)}`);
+}
+function yearOf(iso: string): number {
+  return Number(iso.slice(0, 4));
+}
+
 export default function FinancialAnalysisPage() {
   // Defaults: last ~8 months
   const today = new Date();
@@ -167,27 +176,20 @@ export default function FinancialAnalysisPage() {
   // Data state
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [entries, setEntries] = useState<JournalEntry[]>([]);
+  const [entriesLastYear, setEntriesLastYear] = useState<JournalEntry[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Central category mapping (Revenue) — editable in lib/quality/receipts_categories.ts
+  // Central category mappings
   const revenueCategoryRules = useMemo(() => getReceiptCategoryRules(), []);
+  const expenseCategoryRules = useMemo(() => getExpenseCategoryRules(), []);
 
-  // Inline default mapping for Expenses (by common name tokens)
-  const expenseCategoryRules: CategoryRule[] = useMemo(
-    () => [
-      { key: "utilities",        label: "Utilities",                 name_includes: ["utility", "electric", "water", "internet", "phone"] },
-      { key: "office_supplies",  label: "Office Supplies",           name_includes: ["office supply", "stationery", "paper", "ink", "toner"] },
-      { key: "repairs",          label: "Repairs & Maintenance",     name_includes: ["repair", "maintenance", "service"] },
-      { key: "transport",        label: "Transportation/Fuel",       name_includes: ["transport", "fuel", "gas", "diesel", "fare"] },
-      { key: "banking_fees",     label: "Banking & Fees",            name_includes: ["bank", "fee", "charge", "service charge"] },
-      { key: "charity",          label: "Charity/Outreach",          name_includes: ["charity", "outreach", "aid"] },
-      { key: "salaries",         label: "Salaries & Honoraria",      name_includes: ["salary", "salaries", "honoraria", "stipend", "payroll"] },
-      { key: "liturgical",       label: "Liturgical Supplies",       name_includes: ["liturgical", "host", "wine", "candle"] },
-      // Other auto-bucket will be added if includeUnmapped=true
-    ],
-    []
-  );
+  // Map accounts by id for fast lookups (drawer build)
+  const acctMap = useMemo(() => {
+    const m = new Map<string | number, Account>();
+    (accounts || []).forEach((a) => m.set(a.id, a));
+    return m;
+  }, [accounts]);
 
   // Hardened reload: call our paged helper ONCE (it internally paginates)
   const reload = useCallback(async () => {
@@ -195,13 +197,23 @@ export default function FinancialAnalysisPage() {
       setLoading(true);
       setError(null);
 
-      const [accs, ents] = await Promise.all([
+      // compute last-year range for convenience
+      const from = range.from;
+      const to = range.to;
+      const fromY = yearOf(from);
+      const toY = yearOf(to);
+      const lastFrom = `${fromY - 1}${from.slice(4)}`;
+      const lastTo = `${toY - 1}${to.slice(4)}`;
+
+      const [accs, ents, entsLY] = await Promise.all([
         fetchAccounts(200), // will page internally if needed
-        fetchJournalPaged({ from: range.from, to: range.to }, false, 200) as Promise<JournalEntry[]>,
+        fetchJournalPaged({ from, to }, false, 200) as Promise<JournalEntry[]>,
+        fetchJournalPaged({ from: lastFrom, to: lastTo }, false, 200) as Promise<JournalEntry[]>,
       ]);
 
       setAccounts(accs as any);
       setEntries(ents as any);
+      setEntriesLastYear(entsLY as any);
     } catch (e: any) {
       setError(e?.message || "Failed to load data");
     } finally {
@@ -257,16 +269,170 @@ export default function FinancialAnalysisPage() {
     [netByMonth]
   );
 
-  // ---------- Budget for Variance (simple uplift control) ----------
-  const [budgetUpliftPct, setBudgetUpliftPct] = useState<number>(0); // % applied to Actuals to form Budget
+  // =============== Budget controls for Variance ===============
+  type BaselineMode = "this_period" | "last_year";
+  const currentYear = yearOf(range.from);
+  const [budgetUpliftPct, setBudgetUpliftPct] = useState<number>(0); // % applied to baseline
+  const [baselineMode, setBaselineMode] = useState<BaselineMode>("last_year");
+  const [targetYear, setTargetYear] = useState<number>(currentYear + 1);
+
+  // Baseline matrix for Variance (revenue only)
+  const baselineRevenueForVariance = useMemo(() => {
+    if (baselineMode === "this_period") {
+      return buildReceiptsMatrix({
+        entries,
+        accounts,
+        domain: "revenue",
+        range,
+        selectedSet: undefined,
+        categories: revenueCategoryRules,
+        includeUnmapped,
+        showAccountsAsChildren: false,
+      });
+    }
+    // same months LAST YEAR
+    const from = range.from;
+    const to = range.to;
+    const fromY = yearOf(from);
+    const toY = yearOf(to);
+    const lastRange: Range = {
+      from: `${fromY - 1}${from.slice(4)}`,
+      to: `${toY - 1}${to.slice(4)}`,
+    };
+    return buildReceiptsMatrix({
+      entries: entriesLastYear,
+      accounts,
+      domain: "revenue",
+      range: lastRange,
+      selectedSet: undefined,
+      categories: revenueCategoryRules,
+      includeUnmapped,
+      showAccountsAsChildren: false,
+    });
+  }, [baselineMode, entries, entriesLastYear, accounts, range, revenueCategoryRules, includeUnmapped]);
+
+  // Budget matrix for Variance (apply uplift to baseline)
   const budgetMatrix = useMemo(() => {
-    return projectReceipts(revenueMatrix, {
+    const projected = projectReceipts(baselineRevenueForVariance, {
       globalPct: (budgetUpliftPct || 0) / 100,
       monthlyFactors: new Array(12).fill(1),
       rounding: "none",
       compounding: false,
     });
-  }, [revenueMatrix, budgetUpliftPct]);
+
+    // If baseline is last_year, re-label months to targetYear for clarity
+    if (baselineMode === "last_year") {
+      return {
+        ...projected,
+        months: relabelMonthsToYear(projected.months, targetYear),
+      };
+    }
+    return projected;
+  }, [baselineRevenueForVariance, budgetUpliftPct, baselineMode, targetYear]);
+
+  // ---------- Drawer state / wiring ----------
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerRows, setDrawerRows] = useState<JournalLineRow[]>([]);
+  const [drawerMonth, setDrawerMonth] = useState<string | undefined>(undefined);
+  const [drawerCategory, setDrawerCategory] = useState<string | undefined>(undefined);
+  const [drawerTitle, setDrawerTitle] = useState<string | undefined>(undefined);
+
+  // Build journal rows for a clicked (domain, month, categoryKey)
+  const buildRowsFor = useCallback(
+    (domain: "revenue" | "expense", month: string, categoryKey: string, categoryLabel: string) => {
+      const lines: JournalLineRow[] = [];
+      const rules = domain === "revenue" ? revenueCategoryRules : expenseCategoryRules;
+
+      // iterate entries in month
+      for (const e of entries || []) {
+        if (!e.entry_date || !e.entry_date.startsWith(month)) continue; // ensure YYYY-MM match
+        for (const ln of e.lines || []) {
+          const acc = acctMap.get((ln.account_id as any) ?? "");
+          // signed amount per domain
+          const amt = signedAmountForDomain(ln as any, acc as any, domain as any);
+          if (!amt) continue;
+
+          // categorize line
+          const key = (() => {
+            // 1) account_ids
+            for (const r of rules) {
+              if (r.account_ids && ln.account_id != null && r.account_ids.includes(ln.account_id)) return r.key;
+            }
+            // 2) code prefixes
+            const code = (ln.account_code || (acc as any)?.code || "").toString();
+            if (code) {
+              for (const r of rules) if (r.code_prefixes?.some((p) => code.startsWith(p))) return r.key;
+            }
+            // 3) name includes
+            const name = (ln.account_name || (acc as any)?.name || "").toString().toLowerCase();
+            if (name) {
+              for (const r of rules) if (r.name_includes?.some((tok) => name.includes(tok.toLowerCase()))) return r.key;
+            }
+            return "";
+          })();
+
+          const matched = key ? key === categoryKey : (includeUnmapped && categoryKey === "_other");
+          if (!matched) continue;
+
+          lines.push({
+            date: e.entry_date,
+            entryId: e.id,
+            accountCode: ln.account_code || (acc as any)?.code || null,
+            accountName: ln.account_name || (acc as any)?.name || null,
+            amount: amt,
+          });
+        }
+      }
+
+      lines.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : Math.abs(b.amount) - Math.abs(a.amount)));
+      return { lines, title: `${domain === "revenue" ? "Revenue" : "Expenses"} • ${categoryLabel} — ${month}` };
+    },
+    [entries, acctMap, includeUnmapped, revenueCategoryRules, expenseCategoryRules]
+  );
+
+  // Map of category key -> label for quick lookup
+  const revenueLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    (revenueMatrix.rows || []).forEach((r) => m.set(r.key, r.label));
+    return m;
+  }, [revenueMatrix.rows]);
+  const expenseLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    (expenseMatrix.rows || []).forEach((r) => m.set(r.key, r.label));
+    return m;
+  }, [expenseMatrix.rows]);
+
+  // Handlers for cell clicks
+  const handleRevenueCell = useCallback(
+    ({ rowKey, month }: { rowKey: string; month: string }) => {
+      const label = revenueLabels.get(rowKey) || (rowKey === "_other" ? "Other Receipts" : rowKey);
+      const { lines, title } = buildRowsFor("revenue", month, rowKey, label);
+      setDrawerRows(lines);
+      setDrawerMonth(month);
+      setDrawerCategory(label);
+      setDrawerTitle(title);
+      setDrawerOpen(true);
+    },
+    [buildRowsFor, revenueLabels]
+  );
+
+  const handleExpenseCell = useCallback(
+    ({ rowKey, month }: { rowKey: string; month: string }) => {
+      const label = expenseLabels.get(rowKey) || (rowKey === "_other" ? "Other Expenses" : rowKey);
+      const { lines, title } = buildRowsFor("expense", month, rowKey, label);
+      setDrawerRows(lines);
+      setDrawerMonth(month);
+      setDrawerCategory(label);
+      setDrawerTitle(title);
+      setDrawerOpen(true);
+    },
+    [buildRowsFor, expenseLabels]
+  );
+
+  // Quick flags for variance
+  const projectingDifferentYear = useMemo(() => {
+    return baselineMode === "last_year" && targetYear !== yearOf(range.from);
+  }, [baselineMode, targetYear, range.from]);
 
   return (
     <main style={{ padding: 16 }}>
@@ -287,29 +453,11 @@ export default function FinancialAnalysisPage() {
 
       {/* Status / Content */}
       {loading ? (
-        <div
-          style={{
-            padding: 12,
-            marginTop: 12,
-            border: "1px solid #e5e7eb",
-            borderRadius: 8,
-            background: "#f9fafb",
-          }}
-        >
+        <div style={{ padding: 12, marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 8, background: "#f9fafb" }}>
           Loading…
         </div>
       ) : error ? (
-        <div
-          style={{
-            padding: 12,
-            marginTop: 12,
-            border: "1px solid #fecaca",
-            borderRadius: 8,
-            background: "#fef2f2",
-            color: "#991b1b",
-            whiteSpace: "pre-wrap",
-          }}
-        >
+        <div style={{ padding: 12, marginTop: 12, border: "1px solid #fecaca", borderRadius: 8, background: "#fef2f2", color: "#991b1b", whiteSpace: "pre-wrap" }}>
           {error}
         </div>
       ) : (
@@ -348,6 +496,7 @@ export default function FinancialAnalysisPage() {
                   colTotals={revenueMatrix.colTotals}
                   grandTotal={revenueMatrix.grandTotal}
                   format={(n) => `₱ ${fmt(n)}`}
+                  onCellClick={({ rowKey, month }) => handleRevenueCell({ rowKey, month })}
                 />
               </Section>
 
@@ -360,12 +509,13 @@ export default function FinancialAnalysisPage() {
                   colTotals={expenseMatrix.colTotals}
                   grandTotal={expenseMatrix.grandTotal}
                   format={(n) => `₱ ${fmt(n)}`}
+                  onCellClick={({ rowKey, month }) => handleExpenseCell({ rowKey, month })}
                 />
               </Section>
 
               <div style={{ height: 12 }} />
 
-              {/* Income vs Expenses chart (crossover markers) */}
+              {/* Income vs Expenses chart */}
               <Section title="Income vs Expenses — Crossover">
                 <IncomeVsExpensesChart
                   months={revenueMatrix.months}
@@ -421,6 +571,28 @@ export default function FinancialAnalysisPage() {
               <Section title="Budget Controls">
                 <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
                   <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "#6b7280" }}>Baseline</span>
+                    <select
+                      value={baselineMode}
+                      onChange={(e)=>setBaselineMode(e.target.value as any)}
+                      style={{ border: "1px solid #d1d5db", borderRadius: 6, padding: "6px 8px" }}
+                    >
+                      <option value="this_period">This period’s actuals</option>
+                      <option value="last_year">Same months last year</option>
+                    </select>
+                  </label>
+
+                  <label style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "#6b7280" }}>Target year</span>
+                    <input
+                      type="number"
+                      value={targetYear}
+                      onChange={(e)=>setTargetYear(Number(e.target.value))}
+                      style={{ width: 120, border: "1px solid #d1d5db", borderRadius: 6, padding: "6px 8px", textAlign: "right" }}
+                    />
+                  </label>
+
+                  <label style={{ display: "grid", gap: 6 }}>
                     <span style={{ fontSize: 12, color: "#6b7280" }}>Budget uplift (%)</span>
                     <input
                       type="number"
@@ -430,18 +602,21 @@ export default function FinancialAnalysisPage() {
                       style={{ width: 120, border: "1px solid #d1d5db", borderRadius: 6, padding: "6px 8px", textAlign: "right" }}
                     />
                   </label>
-                  <div style={{ color: "#6b7280", fontSize: 12 }}>
-                    Tip: +3% approximates inflation; negative values tighten the budget.
-                  </div>
+
+                  {projectingDifferentYear && (
+                    <div style={{ color: "#6b7280", fontSize: 12, maxWidth: 520 }}>
+                      Planning view: bars are <b>Budget {targetYear}</b> built from <b>last year’s months</b> + uplift. Numerical variance vs current actuals is hidden (different-year comparison).
+                    </div>
+                  )}
                 </div>
               </Section>
 
               <div style={{ height: 12 }} />
 
-              {/* 3-way comparison chart: bars = Budget, lines = Revenue & Expenses */}
-              <Section title="Budget vs Revenue & Expenses">
+              {/* 3-way comparison chart: bars = Budget (possibly re-labeled to target year), lines = Revenue & Expenses */}
+              <Section title={`Budget vs Revenue & Expenses${baselineMode === "last_year" ? ` — ${targetYear}` : ""}`}>
                 <BudgetVsRevExpChart
-                  months={revenueMatrix.months}
+                  months={baselineMode === "last_year" ? budgetMatrix.months : revenueMatrix.months}
                   budget={budgetMatrix.colTotals}
                   revenue={revenueMatrix.colTotals}
                   expenses={expenseMatrix.colTotals}
@@ -450,13 +625,16 @@ export default function FinancialAnalysisPage() {
 
               <div style={{ height: 12 }} />
 
-              <VarianceSection
-                title="Variance — Actual (Revenue) vs Budget"
-                actual={revenueMatrix}
-                budget={budgetMatrix}
-                format={(n)=>`₱ ${fmt(n)}`}
-                positiveIsGood={false} // below budget = good (green), over budget = bad (red)
-              />
+              {/* Variance table only when comparing the same period */}
+              {!projectingDifferentYear ? (
+                <VarianceSection
+                  title="Variance — Actual (Revenue) vs Budget"
+                  actual={revenueMatrix}
+                  budget={budgetMatrix}
+                  format={(n)=>`₱ ${fmt(n)}`}
+                  positiveIsGood={false} // below budget = good (green), over budget = bad (red)
+                />
+              ) : null}
             </>
           )}
 
@@ -466,6 +644,17 @@ export default function FinancialAnalysisPage() {
               <AccountsCatalog accounts={accounts as any} />
             </Section>
           )}
+
+          {/* Journal Lines Drawer */}
+          <JournalLinesDrawer
+            open={drawerOpen}
+            onClose={() => setDrawerOpen(false)}
+            title={drawerTitle}
+            month={drawerMonth}
+            categoryLabel={drawerCategory}
+            rows={drawerRows}
+            format={(n)=>`₱ ${fmt(n)}`}
+          />
         </>
       )}
     </main>

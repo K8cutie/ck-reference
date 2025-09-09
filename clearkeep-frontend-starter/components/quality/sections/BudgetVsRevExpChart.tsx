@@ -9,18 +9,16 @@ import React, { useMemo, useRef, useState } from "react";
  *   - Line  : Actual Revenue
  *   - Line  : Actual Expenses
  *
- * Notes
- * - No external libraries (pure SVG).
- * - Hover crosshair + tooltip (month, budget, revenue, expenses, coverage).
- * - Light shading where Revenue < Budget.
+ * Hover fix: convert mouse position from CSS pixels → SVG viewBox coords
+ * so hit-testing stays accurate when the SVG is scaled.
  */
 type Props = {
   title?: string;
-  months: string[];     // e.g., ["2025-01", ...]
-  budget: number[];     // bars (needed revenue)
-  revenue: number[];    // actual revenue (line)
-  expenses: number[];   // actual expenses (line)
-  height?: number;      // default 320
+  months: string[];
+  budget: number[];
+  revenue: number[];
+  expenses: number[];
+  height?: number;
 };
 
 export default function BudgetVsRevExpChart({
@@ -49,10 +47,9 @@ export default function BudgetVsRevExpChart({
 
   // Bar geometry
   const slot = (w - pad.l - pad.r) / Math.max(n, 1);
-  const barW = Math.max(6, Math.min(32, slot * 0.45)); // cap width so it looks clean
+  const barW = Math.max(6, Math.min(32, slot * 0.45));
   const barX = (i: number) => x(i) - barW / 2;
 
-  // Smooth(ish) line path
   const linePath = (arr: number[]) => {
     if (arr.length === 0) return "";
     const pts = arr.map((v, i) => [x(i), y(v)]);
@@ -67,7 +64,7 @@ export default function BudgetVsRevExpChart({
     return d;
   };
 
-  // Shade months where Revenue < Budget (shortfall)
+  // Shade months where Revenue < Budget
   const shortfallBands = useMemo(() => {
     const bands: Array<{ x0: number; x1: number }> = [];
     for (let i = 0; i < n; i++) {
@@ -84,7 +81,7 @@ export default function BudgetVsRevExpChart({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const fmtN = (v: number) => Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(v);
-  const covPct = (i: number) => {
+  const coveragePct = (i: number) => {
     const b = B[i] || 0;
     return b === 0 ? 100 : Math.max(0, (R[i] / b) * 100);
   };
@@ -92,10 +89,13 @@ export default function BudgetVsRevExpChart({
   const handleMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const mx = e.clientX - rect.left;
+    // Convert CSS pixel x to viewBox x
+    const cssX = e.clientX - rect.left;
+    const vbX = (cssX / rect.width) * w;
+
     let nearest = 0, best = Infinity;
     for (let i = 0; i < n; i++) {
-      const dx = Math.abs(mx - x(i));
+      const dx = Math.abs(vbX - x(i));
       if (dx < best) { best = dx; nearest = i; }
     }
     setHoverIdx(nearest);
@@ -208,14 +208,19 @@ export default function BudgetVsRevExpChart({
         {/* hover crosshair + tooltip */}
         {hoverIdx !== null && (
           <g>
+            {/* vertical line (use viewBox x) */}
             <line x1={x(hoverIdx)} y1={pad.t} x2={x(hoverIdx)} y2={h - pad.b} stroke="#9ca3af" strokeDasharray="3 3" />
+
+            {/* focus points */}
             <circle cx={x(hoverIdx)} cy={y(R[hoverIdx])} r={4.5} fill="#0ea5e9" stroke="#fff" strokeWidth={1.5} />
             <circle cx={x(hoverIdx)} cy={y(E[hoverIdx])} r={4.5} fill="#ef4444" stroke="#fff" strokeWidth={1.5} />
+
+            {/* highlight budget bar */}
             <rect
               x={barX(hoverIdx)}
-              y={y(B[hoverIdx])}
+              y={Math.min(y(B[hoverIdx]), y(0))}
               width={barW}
-              height={y(0) - y(B[hoverIdx])}
+              height={Math.abs(y(0) - y(B[hoverIdx]))}
               fill="transparent"
               stroke="#64748b"
               strokeDasharray="2 2"
@@ -227,8 +232,8 @@ export default function BudgetVsRevExpChart({
               const tx = Math.min(Math.max(x(hoverIdx) + 10, pad.l + 8), w - pad.r - boxW - 8);
               const yy = Math.min(y(R[hoverIdx]), y(E[hoverIdx]), y(B[hoverIdx]));
               const ty = Math.max(pad.t + 8, Math.min(yy - boxH / 2, h - pad.b - boxH - 8));
-              const coverage = covPct(hoverIdx);
-              const covColor = coverage >= 100 ? "#10b981" : "#ef4444";
+              const cov = coveragePct(hoverIdx);
+              const covColor = cov >= 100 ? "#10b981" : "#ef4444";
               return (
                 <g transform={`translate(${tx}, ${ty})`} filter="url(#tooltipShadow)">
                   <rect width={boxW} height={boxH} rx={10} fill="#111827" opacity={0.95} />
@@ -237,7 +242,7 @@ export default function BudgetVsRevExpChart({
                   <text x={10} y={52} fontSize={13} fill="#0ea5e9">Revenue: {fmtN(R[hoverIdx] || 0)}</text>
                   <text x={10} y={68} fontSize={13} fill="#ef4444">Expenses: {fmtN(E[hoverIdx] || 0)}</text>
                   <text x={10} y={84} fontSize={12} fill={covColor}>
-                    Coverage: {coverage.toFixed(0)}%
+                    Coverage: {cov.toFixed(0)}%
                   </text>
                 </g>
               );
@@ -250,7 +255,6 @@ export default function BudgetVsRevExpChart({
 }
 
 /* --------------------------- helpers (nice ticks) -------------------------- */
-
 function niceCeil(v: number) {
   const p = Math.pow(10, Math.floor(Math.log10(v || 1)));
   const m = Math.ceil(v / p);
