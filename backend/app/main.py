@@ -51,6 +51,9 @@ from app.api.trial_balance import router as trial_balance_router            # ->
 from app.api.income_statement import router as income_statement_router      # -> /gl/reports/income_statement
 from app.api.balance_sheet import router as balance_sheet_router            # -> /gl/reports/balance_sheet
 
+# --- Organization (Diocese) APIs ---
+from app.api.orgs import router as orgs_router  # -> /orgs
+
 app = FastAPI()
 
 # --- CORS for local frontend dev ---
@@ -117,3 +120,6 @@ app.include_router(gl_locks_router)  # /gl/locks
 app.include_router(trial_balance_router)    # /gl/reports/trial_balance
 app.include_router(income_statement_router) # /gl/reports/income_statement
 app.include_router(balance_sheet_router)    # /gl/reports/balance_sheet
+
+# --- Organization (Diocese) ---
+app.include_router(orgs_router)  # /orgs

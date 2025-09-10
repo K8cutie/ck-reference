@@ -1,15 +1,36 @@
-from datetime import date, datetime, timedelta
-from typing import Optional, List, Dict, Any
+from datetime import date, timedelta
+from typing import Optional, Dict, Any, Callable, Generator
+import os
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-# Reuse existing deps (RBAC may be dev-bypassed per STATUS.md; we still wire the guard)
-from app.api.deps import get_db, require_permission  # type: ignore
+# --- Feature flag: disable locks/compliance by default ---
+LOCKS_ENABLED = os.getenv("ORG_LOCKS_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+
+# --- Dep injection (prefer repo deps; fall back to local stubs if missing) ---
+try:
+    from app.api.deps import get_db, require_permission  # type: ignore
+except Exception:
+    from app.db import SessionLocal  # type: ignore
+
+    def get_db() -> Generator[Session, None, None]:  # type: ignore
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def require_permission(_: str) -> Callable[[], None]:  # type: ignore
+        def _noop() -> None:
+            return None
+        return _noop
+
 
 router = APIRouter(prefix="/orgs", tags=["Organization"])
+
 
 # ---------- helpers ----------
 
@@ -37,8 +58,7 @@ def _parse_month(month: Optional[str]) -> (date, date):
 
 def _month_bounds(from_month: str, to_month: str) -> (date, date):
     start, _ = _parse_month(from_month)
-    end_start, end_excl = _parse_month(to_month)
-    # we want inclusive-month range; end_excl is already the first day of the next month after to_month
+    _, end_excl = _parse_month(to_month)
     return start, end_excl
 
 
@@ -59,7 +79,6 @@ def org_kpis(
     """
     start, end = _parse_month(month)
 
-    # Use transactions as the fact source (type is an enum; compare via ::text)
     q = text(
         """
         SELECT
@@ -75,7 +94,6 @@ def org_kpis(
     expense = row.expense or 0
     net = revenue - expense
 
-    # Data freshness = latest transaction date for this org
     q2 = text("SELECT MAX(date) AS latest_date FROM transactions WHERE org_id=:org_id")
     latest = db.execute(q2, {"org_id": org_id}).scalar()
 
@@ -103,9 +121,10 @@ def org_units_leaderboard(
     """
     Leaderboard of units by metric:
     - revenue: total income this month
-    - revenue_growth: (this month - last month) / last month; falls back to 0 if last month is 0
+    - revenue_growth: (this month - last month) / last month; 0 if last month is 0
     """
     start, end = _parse_month(month)
+
     # current month revenue by unit
     q_cur = text(
         """
@@ -117,13 +136,21 @@ def org_units_leaderboard(
         GROUP BY t.unit_id, u.name, u.code
         """
     )
-    cur = {int(r.unit_id): {"unit_id": int(r.unit_id), "unit_name": r.unit_name, "unit_code": r.unit_code, "revenue": float(r.revenue)} for r in db.execute(q_cur, {"org_id": org_id, "start": start, "end": end}).all()}
+    cur_rows = db.execute(q_cur, {"org_id": org_id, "start": start, "end": end}).all()
+    cur = {
+        int(r.unit_id): {
+            "unit_id": int(r.unit_id),
+            "unit_name": r.unit_name,
+            "unit_code": r.unit_code,
+            "revenue": float(r.revenue),
+        }
+        for r in cur_rows
+    }
 
     if metric == "revenue":
         rows = sorted(cur.values(), key=lambda x: x["revenue"], reverse=True)[:limit]
         return {"org_id": org_id, "month": start.strftime("%Y-%m"), "metric": "revenue", "rows": rows}
 
-    # revenue_growth
     # previous month bounds
     prev_end = start
     if start.month == 1:
@@ -146,9 +173,7 @@ def org_units_leaderboard(
     for uid, cur_row in cur.items():
         prev_rev = prev.get(uid, 0.0)
         cur_rev = cur_row["revenue"]
-        growth = 0.0
-        if prev_rev > 0:
-            growth = (cur_rev - prev_rev) / prev_rev
+        growth = 0.0 if prev_rev == 0 else (cur_rev - prev_rev) / prev_rev
         rows.append({**cur_row, "prev_revenue": prev_rev, "growth": growth})
     rows.sort(key=lambda x: x["growth"], reverse=True)
     rows = rows[:limit]
@@ -163,14 +188,22 @@ def org_compliance_period_locks(
     _=Depends(require_permission("org:dashboard:view")),
 ) -> Dict[str, Any]:
     """
-    Report lock coverage for a month:
-    - total_units (active)
-    - locked_count
-    - unlocked_count
-    - missing_count (no lock row)
+    Disabled by default (not needed for non-BIR church finance).
+    Enable by setting ORG_LOCKS_ENABLED=true in environment/.env.
     """
     start, _ = _parse_month(month)
+    if not LOCKS_ENABLED:
+        return {
+            "org_id": org_id,
+            "month": start.strftime("%Y-%m"),
+            "feature": "disabled",
+            "total_units": None,
+            "locked_count": None,
+            "unlocked_count": None,
+            "missing_count": None,
+        }
 
+    # When enabled, compute coverage from gl_period_locks
     total_units = db.execute(
         text("SELECT COUNT(*) FROM org_units WHERE org_id=:org_id AND is_active = TRUE"),
         {"org_id": org_id},
