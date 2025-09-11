@@ -90,19 +90,21 @@ def org_kpis(
         """
     )
     row = db.execute(q, {"org_id": org_id, "start": start, "end": end}).one()
-    revenue = row.revenue or 0
-    expense = row.expense or 0
+    revenue = float(row.revenue or 0)
+    expense = float(row.expense or 0)
     net = revenue - expense
 
-    q2 = text("SELECT MAX(date) AS latest_date FROM transactions WHERE org_id=:org_id")
-    latest = db.execute(q2, {"org_id": org_id}).scalar()
+    latest = db.execute(
+        text("SELECT MAX(date) FROM transactions WHERE org_id=:org_id"),
+        {"org_id": org_id},
+    ).scalar()
 
     return {
         "org_id": org_id,
         "month": start.strftime("%Y-%m"),
-        "revenue": float(revenue),
-        "expense": float(expense),
-        "net": float(net),
+        "revenue": revenue,
+        "expense": expense,
+        "net": net,
         "budget": None,
         "variance": None,
         "data_freshness": latest.isoformat() if latest else None,
@@ -113,45 +115,68 @@ def org_kpis(
 def org_units_leaderboard(
     org_id: int,
     month: Optional[str] = Query(None, description="YYYY-MM; default = current month"),
-    metric: str = Query("revenue", pattern="^(revenue|revenue_growth)$"),
+    metric: str = Query(
+        "revenue",
+        pattern="^(revenue|revenue_growth|expense|net)$",
+        description="Sort by: revenue | revenue_growth | expense | net",
+    ),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
     _=Depends(require_permission("org:dashboard:view")),
 ) -> Dict[str, Any]:
     """
-    Leaderboard of units by metric:
-    - revenue: total income this month
-    - revenue_growth: (this month - last month) / last month; 0 if last month is 0
+    Leaderboard of units by metric.
+
+    Metrics:
+      - revenue: total income this month
+      - revenue_growth: (this month income - last month income) / last month income
+      - expense: total expense this month
+      - net: revenue - expense this month
+
+    Response rows always include: {unit_id, unit_name, unit_code, revenue, expense, net}
+    For revenue_growth, adds: {prev_revenue, growth}
     """
     start, end = _parse_month(month)
 
-    # current month revenue by unit
+    # Current-month revenue & expense by unit
     q_cur = text(
         """
-        SELECT t.unit_id, u.name AS unit_name, u.code AS unit_code,
-               COALESCE(SUM(CASE WHEN t.type::text='income' THEN t.amount ELSE 0 END),0)::numeric AS revenue
+        SELECT t.unit_id,
+               u.name AS unit_name,
+               u.code AS unit_code,
+               COALESCE(SUM(CASE WHEN t.type::text='income'  THEN t.amount ELSE 0 END),0)::numeric AS revenue,
+               COALESCE(SUM(CASE WHEN t.type::text='expense' THEN t.amount ELSE 0 END),0)::numeric AS expense
         FROM transactions t
         JOIN org_units u ON u.id = t.unit_id
         WHERE t.org_id = :org_id AND t.date >= :start AND t.date < :end
         GROUP BY t.unit_id, u.name, u.code
         """
     )
-    cur_rows = db.execute(q_cur, {"org_id": org_id, "start": start, "end": end}).all()
-    cur = {
-        int(r.unit_id): {
+    rows = [
+        {
             "unit_id": int(r.unit_id),
             "unit_name": r.unit_name,
             "unit_code": r.unit_code,
-            "revenue": float(r.revenue),
+            "revenue": float(r.revenue or 0),
+            "expense": float(r.expense or 0),
+            "net": float((r.revenue or 0) - (r.expense or 0)),
         }
-        for r in cur_rows
-    }
+        for r in db.execute(q_cur, {"org_id": org_id, "start": start, "end": end}).all()
+    ]
 
     if metric == "revenue":
-        rows = sorted(cur.values(), key=lambda x: x["revenue"], reverse=True)[:limit]
-        return {"org_id": org_id, "month": start.strftime("%Y-%m"), "metric": "revenue", "rows": rows}
+        rows.sort(key=lambda x: x["revenue"], reverse=True)
+        return {"org_id": org_id, "month": start.strftime("%Y-%m"), "metric": metric, "rows": rows[:limit]}
 
-    # previous month bounds
+    if metric == "expense":
+        rows.sort(key=lambda x: x["expense"], reverse=True)
+        return {"org_id": org_id, "month": start.strftime("%Y-%m"), "metric": metric, "rows": rows[:limit]}
+
+    if metric == "net":
+        rows.sort(key=lambda x: x["net"], reverse=True)
+        return {"org_id": org_id, "month": start.strftime("%Y-%m"), "metric": metric, "rows": rows[:limit]}
+
+    # revenue_growth
     prev_end = start
     if start.month == 1:
         prev_start = date(start.year - 1, 12, 1)
@@ -167,17 +192,15 @@ def org_units_leaderboard(
         GROUP BY t.unit_id
         """
     )
-    prev = {int(r.unit_id): float(r.revenue) for r in db.execute(q_prev, {"org_id": org_id, "start": prev_start, "end": prev_end}).all()}
+    prev = {int(r.unit_id): float(r.revenue or 0) for r in db.execute(q_prev, {"org_id": org_id, "start": prev_start, "end": prev_end}).all()}
 
-    rows = []
-    for uid, cur_row in cur.items():
-        prev_rev = prev.get(uid, 0.0)
-        cur_rev = cur_row["revenue"]
-        growth = 0.0 if prev_rev == 0 else (cur_rev - prev_rev) / prev_rev
-        rows.append({**cur_row, "prev_revenue": prev_rev, "growth": growth})
+    for r in rows:
+        prev_rev = prev.get(r["unit_id"], 0.0)
+        r["prev_revenue"] = prev_rev
+        r["growth"] = 0.0 if prev_rev == 0 else (r["revenue"] - prev_rev) / prev_rev
+
     rows.sort(key=lambda x: x["growth"], reverse=True)
-    rows = rows[:limit]
-    return {"org_id": org_id, "month": start.strftime("%Y-%m"), "metric": "revenue_growth", "rows": rows}
+    return {"org_id": org_id, "month": start.strftime("%Y-%m"), "metric": metric, "rows": rows[:limit]}
 
 
 @router.get("/{org_id}/compliance/period-locks")
@@ -203,7 +226,6 @@ def org_compliance_period_locks(
             "missing_count": None,
         }
 
-    # When enabled, compute coverage from gl_period_locks
     total_units = db.execute(
         text("SELECT COUNT(*) FROM org_units WHERE org_id=:org_id AND is_active = TRUE"),
         {"org_id": org_id},
